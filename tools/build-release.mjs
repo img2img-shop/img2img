@@ -90,7 +90,10 @@ for (const [target, transform] of Object.entries(TARGETS)) {
     ? { name: file.name, content: Buffer.from(JSON.stringify(transform(manifest), null, 2) + '\n') }
     : file);
   const zipName = `img2img-${target}-${version}.zip`;
-  fs.writeFileSync(path.join(outDir, zipName), zip(targetFiles, changed));
+  // (an identical package is left alone: a browser may have it open, e.g. loaded as a temporary add-on)
+  const zipPath = path.join(outDir, zipName);
+  const bytes = zip(targetFiles, changed);
+  if (!fs.existsSync(zipPath) || !fs.readFileSync(zipPath).equals(bytes)) fs.writeFileSync(zipPath, bytes);
   packages[target] = { zip: zipName, files: targetFiles };
   console.log(`${target}: dist/extension/${version}/${zipName} (${targetFiles.length} files)`);
 }

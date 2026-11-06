@@ -981,10 +981,18 @@ async function fetchImageBlob(imageUrl) {
   return (await isProcessableBitmap(blob)) ? blob : bitmapToPng(blob);
 }
 
+// Bytes as text (for file signatures), read one by one: in Firefox the bytes belong to the page, and slice() or
+// subarray() would read their constructor, which a content script isn't allowed to
+function bytesText(bytes, start, end) {
+  let text = '';
+  for (let i = start; i < Math.min(end, bytes.length); i++) text += String.fromCharCode(bytes[i]);
+  return text;
+}
+
 // Formats the API and ComfyUI read, by their first bytes (a server's Content-Type can be wrong)
 async function isProcessableBitmap(blob) {
   const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
-  const text = (start, end) => String.fromCharCode(...bytes.slice(start, end));
+  const text = (start, end) => bytesText(bytes, start, end);
   return (bytes[0] === 0x89 && text(1, 4) === 'PNG') // also APNG
     || (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) // JPEG
     || text(0, 4) === 'GIF8'
@@ -1034,7 +1042,7 @@ async function drawToPng(image, width, height) {
 // Animated GIFs, WebPs and PNGs: only their first frame is processed
 async function isAnimated(blob) {
   const bytes = new Uint8Array(await blob.slice(0, 1024 * 1024).arrayBuffer());
-  const text = (start, end) => String.fromCharCode(...bytes.slice(start, end));
+  const text = (start, end) => bytesText(bytes, start, end);
   if (text(0, 4) === 'GIF8') {
     // Each frame starts with a graphic control extension (21 F9 04)
     let frames = 0;
