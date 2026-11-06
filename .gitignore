@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Chrome's "Pack extension" output: the .pem is the signing key and must never be committed
+*.pem
+*.crx
+
+# Release packages (tools/build-release.mjs)
+dist/

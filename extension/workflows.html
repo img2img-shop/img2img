@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My workflows - img2img</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    [hidden] {
+      display: none !important;
+    }
+    body {
+      margin: 0;
+      background: #f6f6f6;
+      color: #222;
+      font: 14px/1.45 Arial, sans-serif;
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    header img {
+      height: 36px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+    h3 {
+      margin: 18px 0 6px;
+      font-size: 13px;
+      color: #555;
+    }
+    .intro {
+      margin: 0 0 20px;
+      color: #666;
+    }
+    .card {
+      margin-bottom: 16px;
+      padding: 18px;
+      border: 1px solid #e2e2e2;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .notice {
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background: #fff3e0;
+      color: #8a4b00;
+    }
+    .notice.error {
+      background: #ffebee;
+      color: #b71c1c;
+    }
+    .notice ul {
+      margin: 6px 0 0;
+      padding-left: 18px;
+    }
+    button {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 4px;
+      background: #f0f0f0;
+      color: #333;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #e4e4e4;
+    }
+    button.primary {
+      background: #4CAF50;
+      color: #fff;
+    }
+    button.primary:hover {
+      background: #45a049;
+    }
+    button.danger {
+      color: #c62828;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .workflow-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 0;
+      border-top: 1px solid #eee;
+    }
+    .workflow-row:first-child {
+      border-top: none;
+    }
+    .workflow-name {
+      font-weight: bold;
+    }
+    .muted {
+      color: #888;
+      font-size: 12px;
+    }
+    label.field {
+      display: block;
+      margin: 14px 0 4px;
+      color: #555;
+      font-size: 13px;
+    }
+    input[type="text"], select {
+      width: 100%;
+      max-width: 480px;
+      padding: 7px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    .filter {
+      margin-bottom: 6px;
+    }
+    /* One row per input that can become a popup setting */
+    .setting-row {
+      display: grid;
+      grid-template-columns: 24px minmax(120px, 1fr) minmax(0, 1.3fr) minmax(140px, 1fr);
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      border-top: 1px solid #f2f2f2;
+    }
+    .setting-row input[type="text"] {
+      max-width: none;
+      padding: 5px 7px;
+      font-size: 13px;
+    }
+    .setting-row input[type="text"]:disabled {
+      background: #fafafa;
+      color: #aaa;
+    }
+    .setting-input {
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .setting-value {
+      color: #777;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @media (max-width: 640px) {
+      .setting-row {
+        grid-template-columns: 24px 1fr;
+      }
+      .setting-row .setting-value, .setting-row input[type="text"] {
+        grid-column: 2;
+      }
+    }
+    .editor-actions {
+      margin-top: 20px;
+    }
+    /* The workflow drawn like ComfyUI does (workflows.js) */
+    .graph-wrap {
+      position: relative;
+      height: 540px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #202020;
+    }
+    #graph {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+      user-select: none;
+      outline: none;
+      background-image: radial-gradient(#3a3a3a 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    #graph.panning {
+      cursor: grabbing;
+    }
+    #graph .node {
+      cursor: pointer;
+    }
+    #graph text {
+      font-family: Arial, sans-serif;
+      pointer-events: none;
+    }
+    .graph-toolbar {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .graph-toolbar > * {
+      pointer-events: auto;
+    }
+    .graph-buttons button, .breadcrumb button {
+      background: #333;
+      color: #ddd;
+      padding: 4px 10px;
+    }
+    .graph-buttons button:hover, .breadcrumb button:hover {
+      background: #444;
+    }
+    .breadcrumb {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      color: #aaa;
+    }
+    .legend {
+      position: absolute;
+      left: 8px;
+      bottom: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .chip {
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      color: #fff;
+    }
+    .chip.page { background: #2e7d32; }
+    .chip.source { background: #7b1fa2; }
+    .chip.result { background: #1565c0; }
+    .chip.setting { background: #ef6c00; }
+    .roles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .roles button {
+      padding: 2px 8px;
+      background: none;
+      color: #1976D2;
+    }
+    .roles button:hover {
+      text-decoration: underline;
+      background: none;
+    }
+    /* What the selected node does */
+    .node-panel {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border: 1px solid #e2e2e2;
+      border-radius: 6px;
+      background: #fcfcfc;
+    }
+    .node-panel .node-name {
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+    .node-panel .choice {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 4px 0;
+    }
+    .node-panel .source-options {
+      margin: 6px 0 2px 24px;
+    }
+    .node-panel .source-options input[type="text"] {
+      max-width: 300px;
+    }
+    .setting-group-title {
+      cursor: pointer;
+    }
+    button.link-like {
+      padding: 0;
+      margin-bottom: 4px;
+      background: none;
+      color: #1976D2;
+    }
+    button.link-like:hover {
+      text-decoration: underline;
+    }
+    .setting-group-title:hover {
+      color: #1976D2;
+    }
+    /* The ticked settings, in the order the popup shows them */
+    #orderPanel {
+      margin-bottom: 14px;
+    }
+    .order-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 480px;
+      padding: 4px 8px;
+      border: 1px solid #e6e6e6;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      background: #fafafa;
+    }
+    .order-row .order-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .order-row button {
+      padding: 2px 9px;
+    }
+    /* Dark mode (shared/theme.js sets data-theme; the setting is shared with the popup and the other extension pages).
+       The graph is dark in both. */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+    }
+    :root[data-theme="dark"] body {
+      background: #141415;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] h3,
+    :root[data-theme="dark"] label.field {
+      color: #b4b4b4;
+    }
+    :root[data-theme="dark"] .intro,
+    :root[data-theme="dark"] .setting-value {
+      color: #a0a0a0;
+    }
+    :root[data-theme="dark"] .muted {
+      color: #8f8f8f;
+    }
+    :root[data-theme="dark"] .card {
+      background: #1e1e20;
+      border-color: #333336;
+    }
+    :root[data-theme="dark"] .node-panel,
+    :root[data-theme="dark"] .order-row {
+      background: #232325;
+      border-color: #38383b;
+    }
+    :root[data-theme="dark"] .workflow-row,
+    :root[data-theme="dark"] .setting-row {
+      border-color: #2e2e31;
+    }
+    :root[data-theme="dark"] .notice {
+      background: #3a2a10;
+      color: #fdba74;
+    }
+    :root[data-theme="dark"] .notice.error {
+      background: #4a1717;
+      color: #fca5a5;
+    }
+    :root[data-theme="dark"] button {
+      background: #2e2e31;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] button:hover {
+      background: #3a3a3e;
+    }
+    :root[data-theme="dark"] button.primary {
+      background: #4CAF50;
+      color: #fff;
+    }
+    :root[data-theme="dark"] button.primary:hover {
+      background: #45a049;
+    }
+    :root[data-theme="dark"] button.danger {
+      color: #fca5a5;
+    }
+    :root[data-theme="dark"] .graph-buttons button,
+    :root[data-theme="dark"] .breadcrumb button {
+      background: #333;
+      color: #ddd;
+    }
+    :root[data-theme="dark"] .graph-buttons button:hover,
+    :root[data-theme="dark"] .breadcrumb button:hover {
+      background: #444;
+    }
+    :root[data-theme="dark"] input[type="text"],
+    :root[data-theme="dark"] select {
+      background: #262628;
+      color: #e3e3e3;
+      border-color: #444448;
+    }
+    :root[data-theme="dark"] .setting-row input[type="text"]:disabled {
+      background: #1e1e20;
+      color: #6f6f6f;
+    }
+    :root[data-theme="dark"] .roles button,
+    :root[data-theme="dark"] button.link-like,
+    :root[data-theme="dark"] .setting-group-title:hover {
+      color: #64b5f6;
+    }
+    :root[data-theme="dark"] .roles button,
+    :root[data-theme="dark"] button.link-like {
+      background: none;
+    }
+    /* The theme switch, in the header's corner */
+    header .theme-toggle {
+      margin-left: auto;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <img src="icons/icon48.png" alt="">
+      <h1>My workflows</h1>
+    </header>
+    <p class="intro">
+      Add your own ComfyUI workflows to img2img and choose which of their settings appear in the popup. A workflow needs a
+      Load Image node, which gets the image you pick on a page, and a Save or Preview Image node for the result. My workflows
+      run on your own ComfyUI (Processing: My ComfyUI). Like every img2img workflow, each image and each result is checked
+      for adult content, and isn't processed or shown if it's flagged.
+    </p>
+
+    <div id="processingNotice" class="notice" hidden>
+      Processing is set to the img2img server. My workflows only run with Processing set to My ComfyUI (popup, Settings).
+    </div>
+    <div id="pageError" class="notice error" hidden></div>
+
+    <section class="card" id="listCard">
+      <h2>Workflows</h2>
+      <div id="workflowList"></div>
+      <p id="emptyList" class="muted" hidden>No workflows yet. Add one saved from ComfyUI: use Save (a .json file), or Export (API).</p>
+      <div class="actions" style="margin-top: 12px;">
+        <button id="addWorkflow" class="primary" title="A workflow saved from ComfyUI (Save or Export (API)), or one exported from this page">Add workflow&hellip;</button>
+      </div>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    </section>
+
+    <section class="card" id="editorCard" hidden>
+      <h2 id="editorTitle">New workflow</h2>
+      <div id="editorWarnings" class="notice" hidden></div>
+
+      <label class="field" for="workflowName">Name (shown in the popup)</label>
+      <input type="text" id="workflowName" maxlength="60">
+
+      <h3>The workflow</h3>
+      <p class="muted" style="margin: 0 0 8px;">Click a node to choose what it does: which Load Image node gets the image from the page, which ones get a source picked in the popup, and which node gives the result. Drag to move around, scroll to zoom, double-click a subgraph to open it.</p>
+      <div id="roles" class="roles"></div>
+      <div class="graph-wrap">
+        <svg id="graph" tabindex="0" aria-label="The workflow's nodes"><g id="viewport"></g></svg>
+        <div class="graph-toolbar">
+          <div id="breadcrumb" class="breadcrumb"></div>
+          <div class="graph-buttons">
+            <button id="zoomOut" title="Zoom out">&minus;</button>
+            <button id="zoomIn" title="Zoom in">+</button>
+            <button id="zoomFit" title="Show the whole workflow">Fit</button>
+          </div>
+        </div>
+        <div class="legend">
+          <span class="chip page">Page image</span><span class="chip source">Source</span><span class="chip result">Result</span><span class="chip setting">Has popup settings</span>
+        </div>
+      </div>
+      <div id="nodePanel" class="node-panel"></div>
+
+      <h3>Settings in the popup</h3>
+      <p class="muted" style="margin: 0 0 8px;">Tick the inputs you want to change from the popup and give them a name. Everything else keeps the value it has in the workflow.</p>
+      <div id="orderPanel" hidden>
+        <h3>Order in the popup</h3>
+        <div id="orderList"></div>
+      </div>
+      <input type="text" id="settingsFilter" class="filter" placeholder="Filter by node or input name">
+      <div id="settingsList"></div>
+
+      <div class="actions editor-actions">
+        <button id="saveWorkflow" class="primary">Save workflow</button>
+        <button id="cancelEdit">Cancel</button>
+      </div>
+    </section>
+  </main>
+  <script src="shared/workflows.js"></script>
+  <script src="shared/custom-workflows.js"></script>
+  <script src="workflows.js"></script>
+</body>
+</html>

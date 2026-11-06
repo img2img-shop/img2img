@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>img2img</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    /* Class display rules (e.g. flex toggles) must not override the hidden attribute */
+    [hidden] {
+      display: none !important;
+    }
+    body {
+      width: 300px;
+      padding: 15px;
+      font-family: Arial, sans-serif;
+    }
+    .section {
+      margin-bottom: 20px;
+    }
+    /* The last one ends at the body's padding, like the sides */
+    .section:last-of-type {
+      margin-bottom: 0;
+    }
+    .popup-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: -4px 0 12px;
+    }
+    /* Credits left on the img2img account (Processing: img2img server): red 5 or less, orange up to 20 */
+    .credit-badge {
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .credit-badge.credit-medium {
+      background-color: #fff3e0;
+      color: #e65100;
+    }
+    .credit-badge.credit-low {
+      background-color: #ffebee;
+      color: #c62828;
+    }
+    /* Opens the site's Credits page */
+    .credit-badge.credit-link {
+      cursor: pointer;
+    }
+    .credit-badge.credit-link:hover {
+      text-decoration: underline;
+    }
+    /* While the balance is being fetched */
+    .credit-badge.credit-loading {
+      display: inline-flex;
+      align-items: center;
+      background-color: #f0f0f0;
+      color: #777;
+    }
+    .credit-spinner {
+      display: block;
+      width: 16px;
+      height: 16px;
+    }
+    .popup-header img {
+      display: block;
+      height: 36px;
+    }
+    .section-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .button-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.3s;
+      width: 100%;
+      white-space: nowrap;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #startSelection {
+      background-color: #4CAF50;
+      color: white;
+    }
+    #startSelection:hover:not(:disabled) {
+      background-color: #45a049;
+    }
+    #selectAllVisible {
+      background-color: #2196F3;
+      color: white;
+    }
+    #selectAllVisible:hover:not(:disabled) {
+      background-color: #1976D2;
+    }
+    #purgeCache {
+      background-color: #eee;
+      color: #333;
+    }
+    #purgeCache:hover:not(:disabled) {
+      background-color: #ddd;
+    }
+    #selectAllVisible.processing {
+      background-color: #f44336;
+    }
+    #selectAllVisible.processing:hover:not(:disabled) {
+      background-color: #d32f2f;
+    }
+    .status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 4px;
+      font-size: 14px;
+      display: none;
+    }
+    .status.success {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+      display: block;
+    }
+    .status.error {
+      background-color: #ffebee;
+      color: #c62828;
+      display: block;
+    }
+    .status.processing {
+      background-color: #e3f2fd;
+      color: #1565c0;
+      display: block;
+    }
+    .face-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .face-item {
+      position: relative;
+      aspect-ratio: 1;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .face-item.selected {
+      border-color: #4CAF50;
+    }
+    .face-item.dragging {
+      opacity: 0.4;
+    }
+    .face-item.drop-target {
+      border-color: #2196F3;
+    }
+    .face-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .face-item .delete-btn {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(255, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      display: none;
+      padding: 0;
+    }
+    .face-item:hover .delete-btn {
+      display: block;
+    }
+    .delete-face {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(255, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      display: none;
+      padding: 0;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .face-item:hover .delete-face {
+      display: block;
+    }
+    .add-face {
+      aspect-ratio: 1;
+      border: 2px dashed #ddd;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #666;
+    }
+    .add-face:hover {
+      border-color: #4CAF50;
+      color: #4CAF50;
+    }
+    #fileInput {
+      display: none;
+    }
+    .auto-process-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .toggle-label {
+      font-size: 14px;
+      color: #666;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 50px;
+      height: 24px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+    }
+    input:checked + .slider {
+      background-color: #4CAF50;
+    }
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+    .slider.round {
+      border-radius: 34px;
+    }
+    .slider.round:before {
+      border-radius: 50%;
+    }
+    /* Until popup.js has applied the saved state (open sections, folded stages, the workflow's sections,
+       toggles), nothing shows and nothing animates, so the popup doesn't jump about as it opens */
+    body.restoring {
+      visibility: hidden;
+    }
+    body.restoring *, body.restoring *::before, body.restoring *::after {
+      transition: none !important;
+    }
+    /* Accordion styles */
+    .accordion {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    .accordion-header {
+      padding: 10px 15px;
+      background-color: #f5f5f5;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-radius: 4px;
+    }
+    .accordion-header:hover {
+      background-color: #eee;
+    }
+    .accordion-content {
+      padding: 15px;
+      display: none;
+    }
+    .accordion-content.active {
+      display: block;
+    }
+    .accordion-icon {
+      transition: transform 0.3s ease;
+    }
+    .accordion-header.active .accordion-icon {
+      transform: rotate(180deg);
+    }
+    /* Settings styles */
+    .settings-group {
+      margin-bottom: 15px;
+    }
+    .settings-label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+      color: #666;
+    }
+    select, input[type="range"], #comfyServerAddress, #img2imgApiKey, .controlnet-number, input[type="color"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input[type="range"] {
+      padding: 0;
+      border: none;
+      margin: 10px 0;
+    }
+    .range-value {
+      display: inline-block;
+      margin-left: 10px;
+      font-size: 14px;
+      color: #666;
+    }
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      overflow-y: auto;
+    }
+    .modal-content {
+      position: relative;
+      background-color: #fff;
+      margin: 20px auto;
+      padding: 15px;
+      width: 90%;
+      max-width: 280px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .close-modal {
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      font-size: 20px;
+      cursor: pointer;
+      color: #666;
+      z-index: 1;
+    }
+    .close-modal:hover {
+      color: #333;
+    }
+    .source-images-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .source-image-item {
+      position: relative;
+      aspect-ratio: 1;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .source-image-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .source-image-item .remove-image {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(255, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      display: none;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .source-image-item:hover .remove-image {
+      display: block;
+    }
+    .source-image-item {
+      cursor: grab;
+    }
+    .source-image-item.dragging {
+      opacity: 0.4;
+    }
+    .source-image-item.drop-target {
+      border-color: #2196F3;
+    }
+    .image-order {
+      position: absolute;
+      bottom: 2px;
+      left: 2px;
+      min-width: 16px;
+      padding: 1px 4px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-size: 10px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    .settings-subheading {
+      margin: 4px 0 10px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+      font-weight: bold;
+      color: #333;
+    }
+    .workflow-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #888;
+    }
+    /* The terms agreement for My ComfyUI users */
+    .terms-card {
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #ffcc80;
+      border-radius: 6px;
+      background: #fff8e1;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #333;
+    }
+    .terms-title {
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+    .terms-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      cursor: pointer;
+    }
+    .terms-row input {
+      margin-top: 2px;
+      flex-shrink: 0;
+    }
+    .terms-card a {
+      color: #1976D2;
+    }
+    #termsAgree, .site-access-allow {
+      margin-top: 10px;
+      background-color: #4CAF50;
+      color: white;
+    }
+    /* A button that reads as a link (opens the My workflows page) */
+    .link-button {
+      width: auto;
+      margin-top: 6px;
+      padding: 0;
+      background: none;
+      color: #1976D2;
+      font-size: 12px;
+    }
+    .link-button:hover {
+      text-decoration: underline;
+    }
+    /* "New seed each time" sits right under its seed */
+    .seed-random {
+      margin-top: -8px;
+    }
+    .seed-random .settings-label {
+      font-size: 12px;
+    }
+    .setting-text {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font: 13px Arial, sans-serif;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+    /* Heading for each processing stage in the workflow settings */
+    .settings-stage {
+      margin: 18px 0 8px;
+      padding-top: 8px;
+      border-top: 1px solid #eee;
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #999;
+    }
+    .stage-hint {
+      margin: -6px 0 15px;
+    }
+    .source-actions {
+      margin: 10px 0 0;
+    }
+    .source-actions button {
+      background-color: #f0f0f0;
+      color: #333;
+      font-size: 12px;
+      padding: 6px 8px;
+    }
+    .source-actions button:hover {
+      background-color: #e4e4e4;
+    }
+    input[type="color"] {
+      height: 36px;
+      padding: 2px;
+      cursor: pointer;
+    }
+    .settings-stage {
+      cursor: pointer;
+      user-select: none;
+    }
+    .settings-stage::after {
+      content: "\25BE";
+      float: right;
+    }
+    .stage.collapsed .settings-stage::after {
+      content: "\25B8";
+    }
+    .stage.collapsed .stage-body {
+      display: none;
+    }
+    .source-images-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #888;
+    }
+    .image-viewer {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.9);
+      cursor: zoom-out;
+    }
+    .image-viewer[hidden] {
+      display: none;
+    }
+    .image-viewer img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .viewer-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 32px;
+      height: 48px;
+      padding: 0;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      font-size: 28px;
+      line-height: 1;
+    }
+    .viewer-nav:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+    .viewer-prev {
+      left: 6px;
+    }
+    .viewer-next {
+      right: 6px;
+    }
+    .viewer-counter {
+      position: absolute;
+      bottom: 8px;
+      color: #ddd;
+      font-size: 12px;
+    }
+    .add-source-image {
+      aspect-ratio: 1;
+      border: 2px dashed #ddd;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #666;
+      font-size: 12px;
+      padding: 0 4px;
+      text-align: center;
+    }
+    .add-source-image:hover {
+      border-color: #4CAF50;
+      color: #4CAF50;
+    }
+    .modal-actions {
+      margin-top: 15px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .modal-actions button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .save-face {
+      background-color: #4CAF50;
+      color: white;
+    }
+    .save-face:hover {
+      background-color: #45a049;
+    }
+    .cancel-face {
+      background-color: #f44336;
+      color: white;
+    }
+    .cancel-face:hover {
+      background-color: #d32f2f;
+    }
+    .face-preview {
+      width: 100%;
+      height: 150px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .face-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .face-name-input {
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    .face-name-input:focus {
+      outline: none;
+      border-color: #4CAF50;
+    }
+    .image-count {
+      position: absolute;
+      bottom: 5px;
+      right: 5px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+    }
+    .modal h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      color: #333;
+    }
+    .face-item .edit-face {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: rgba(33, 150, 243, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      display: none;
+      padding: 0;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .face-item:hover .edit-face {
+      display: block;
+    }
+    .status-section {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+    /* Messages get their own line under the switches */
+    .status-section .status {
+      order: 1;
+      flex-basis: 100%;
+      box-sizing: border-box;
+    }
+    .toggle-grid {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    /* Dark mode (shared/theme.js sets data-theme; the setting is shared with the other extension pages). The coloured
+       buttons keep their colours; light surfaces, borders and greys get dark ones. */
+    .popup-header .logo-dark,
+    :root[data-theme="dark"] .popup-header .logo-light {
+      display: none;
+    }
+    :root[data-theme="dark"] .popup-header .logo-dark {
+      display: block;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+    }
+    :root[data-theme="dark"] body {
+      background: #1b1b1c;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] .section-title,
+    :root[data-theme="dark"] .settings-subheading,
+    :root[data-theme="dark"] .modal h3,
+    :root[data-theme="dark"] .terms-card,
+    :root[data-theme="dark"] .close-modal:hover {
+      color: #ececec;
+    }
+    :root[data-theme="dark"] .toggle-label,
+    :root[data-theme="dark"] .settings-label,
+    :root[data-theme="dark"] .range-value,
+    :root[data-theme="dark"] .close-modal,
+    :root[data-theme="dark"] .add-face,
+    :root[data-theme="dark"] .add-source-image {
+      color: #b4b4b4;
+    }
+    :root[data-theme="dark"] .workflow-hint,
+    :root[data-theme="dark"] .source-images-hint,
+    :root[data-theme="dark"] .settings-stage {
+      color: #8f8f8f;
+    }
+    :root[data-theme="dark"] .face-item,
+    :root[data-theme="dark"] .add-face,
+    :root[data-theme="dark"] .accordion,
+    :root[data-theme="dark"] select,
+    :root[data-theme="dark"] input[type="range"],
+    :root[data-theme="dark"] #comfyServerAddress,
+    :root[data-theme="dark"] #img2imgApiKey,
+    :root[data-theme="dark"] .controlnet-number,
+    :root[data-theme="dark"] input[type="color"],
+    :root[data-theme="dark"] .source-image-item,
+    :root[data-theme="dark"] .setting-text,
+    :root[data-theme="dark"] .add-source-image,
+    :root[data-theme="dark"] .face-preview,
+    :root[data-theme="dark"] .face-name-input {
+      border-color: #3d3d40;
+    }
+    :root[data-theme="dark"] select,
+    :root[data-theme="dark"] #comfyServerAddress,
+    :root[data-theme="dark"] #img2imgApiKey,
+    :root[data-theme="dark"] .controlnet-number,
+    :root[data-theme="dark"] .setting-text,
+    :root[data-theme="dark"] .face-name-input {
+      background: #262628;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] .face-item.selected,
+    :root[data-theme="dark"] .add-face:hover,
+    :root[data-theme="dark"] .add-source-image:hover,
+    :root[data-theme="dark"] .face-name-input:focus {
+      border-color: #4CAF50;
+    }
+    :root[data-theme="dark"] .add-face:hover,
+    :root[data-theme="dark"] .add-source-image:hover {
+      color: #4CAF50;
+    }
+    :root[data-theme="dark"] .face-item.drop-target,
+    :root[data-theme="dark"] .source-image-item.drop-target {
+      border-color: #2196F3;
+    }
+    :root[data-theme="dark"] .settings-subheading,
+    :root[data-theme="dark"] .settings-stage {
+      border-color: #333336;
+    }
+    :root[data-theme="dark"] .accordion-header {
+      background-color: #262628;
+    }
+    :root[data-theme="dark"] .accordion-header:hover {
+      background-color: #303033;
+    }
+    :root[data-theme="dark"] #purgeCache,
+    :root[data-theme="dark"] .source-actions button {
+      background-color: #2e2e31;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] #purgeCache:hover:not(:disabled),
+    :root[data-theme="dark"] .source-actions button:hover {
+      background-color: #3a3a3e;
+    }
+    :root[data-theme="dark"] .slider {
+      background-color: #4a4a4e;
+    }
+    :root[data-theme="dark"] input:checked + .slider {
+      background-color: #4CAF50;
+    }
+    :root[data-theme="dark"] .modal-content {
+      background-color: #232325;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    :root[data-theme="dark"] .status.success,
+    :root[data-theme="dark"] .credit-badge {
+      background-color: #143d1f;
+      color: #86efac;
+    }
+    :root[data-theme="dark"] .status.error,
+    :root[data-theme="dark"] .credit-badge.credit-low {
+      background-color: #4a1717;
+      color: #fca5a5;
+    }
+    :root[data-theme="dark"] .status.processing {
+      background-color: #132f4c;
+      color: #93c5fd;
+    }
+    :root[data-theme="dark"] .credit-badge.credit-medium {
+      background-color: #45290b;
+      color: #fdba74;
+    }
+    :root[data-theme="dark"] .credit-badge.credit-loading {
+      background-color: #2e2e31;
+      color: #a3a3a3;
+    }
+    :root[data-theme="dark"] .terms-card {
+      background: #3a2e10;
+      border-color: #7a5a1a;
+    }
+    :root[data-theme="dark"] .terms-card a,
+    :root[data-theme="dark"] .link-button {
+      color: #64b5f6;
+    }
+  </style>
+</head>
+<body class="restoring">
+  <!-- Face Creation Modal -->
+  <div id="faceModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal">&times;</span>
+      <h3 id="modalTitle">Create New Source</h3>
+      <input type="text" class="face-name-input" id="faceNameInput" placeholder="Enter source name">
+      <div class="face-preview" id="facePreview">
+        <img id="previewImage" src="" alt="Preview" style="display: none;">
+      </div>
+      <div class="source-images-grid" id="sourceImagesGrid">
+        <div class="add-source-image" id="addSourceImage">
+          <span>+ Add Image</span>
+        </div>
+      </div>
+      <div class="source-images-hint">Drag to reorder, click to expand. Image 1 is the thumbnail.</div>
+      <div class="modal-actions">
+        <button class="cancel-face" id="cancelFace">Cancel</button>
+        <button class="save-face" id="saveFace">Save Source</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full-size viewer for a source's images -->
+  <div id="imageViewer" class="image-viewer" hidden>
+    <img id="viewerImage" alt="Source image">
+    <button id="viewerPrev" class="viewer-nav viewer-prev" title="Previous (Left arrow)">&#8249;</button>
+    <button id="viewerNext" class="viewer-nav viewer-next" title="Next (Right arrow)">&#8250;</button>
+    <div id="viewerCounter" class="viewer-counter"></div>
+  </div>
+
+  <header class="popup-header">
+    <img class="logo-light" src="icons/logo.svg" alt="img2img, Browser Extension">
+    <img class="logo-dark" src="icons/logo-dark.svg" alt="img2img, Browser Extension">
+    <span id="creditBadge" class="credit-badge" hidden></span>
+  </header>
+
+  <!-- Firefox lets users withhold or revoke the site access granted at install (popup.js) -->
+  <div id="siteAccessCard" class="terms-card" hidden>
+    <div class="terms-title">Allow access to websites</div>
+    <div>img2img needs access to all websites to find and edit images on the pages you visit, and to reach your own ComfyUI.</div>
+    <button id="siteAccessAllow" class="site-access-allow">Allow</button>
+  </div>
+
+  <!-- My ComfyUI users have no account, so they agree to the terms here, once (popup.js) -->
+  <div id="termsCard" class="terms-card" hidden>
+    <div class="terms-title">Before you start</div>
+    <label class="terms-row">
+      <input type="checkbox" id="termsCheckbox">
+      <span>I agree to img2img's <a id="termsLink" href="#" target="_blank">terms of service</a> and <a id="acceptableUseLink" href="#" target="_blank">acceptable use policy</a>. I'm 18 or over, and I'll only edit images I have the right to edit: never an image of a person without their consent.</span>
+    </label>
+    <button id="termsAgree" disabled>Agree</button>
+  </div>
+
+  <div class="accordion">
+    <div class="accordion-header active" id="workflowAccordionHeader">
+      <span>Workflow</span>
+      <span class="accordion-icon">^</span>
+    </div>
+    <div class="accordion-content active" id="workflowAccordionContent">
+      <div class="settings-group">
+        <label class="settings-label" for="workflowSelect">Workflow</label>
+        <select id="workflowSelect">
+          <option value="controlnet">ControlNet map</option>
+          <option value="upscale">Upscale</option>
+          <option value="background">Background removal / blur</option>
+          <option value="restore">Face restore</option>
+        </select>
+        <!-- Description of a workflow without a source face (popup.js fills it in) -->
+        <div id="workflowHint" class="workflow-hint" hidden></div>
+        <button id="manageWorkflows" class="link-button" title="Add your own ComfyUI workflows and choose which of their settings appear here">My workflows: add or edit&hellip;</button>
+      </div>
+
+      <!-- Each section folds away by clicking its heading (see popup.js) -->
+      <div id="sourceStage" class="stage" data-stage="source">
+        <div class="settings-stage">Source</div>
+        <div class="stage-body">
+          <div class="face-grid" id="faceGrid">
+            <div class="add-face" id="addFace">
+              <span>+ Add Source</span>
+            </div>
+          </div>
+          <input type="file" id="fileInput" accept="image/*" multiple>
+          <div class="button-group source-actions">
+            <button id="exportSources" title="Save all sources and their images to a .json file">Export sources</button>
+            <button id="importSources" title="Add the sources from an exported .json file (a source with the same id is replaced)">Import sources</button>
+          </div>
+          <input type="file" id="importSourcesInput" accept=".json,application/json" hidden>
+        </div>
+      </div>
+
+      <div id="controlnetSettings" class="stage" data-stage="preprocessor" hidden>
+        <div class="settings-stage">Preprocessor</div>
+        <div class="stage-body">
+        <div class="settings-group">
+          <label class="settings-label" for="controlnetPreprocessor" title="Preprocessors from comfyui_controlnet_aux. Ones that use a model download it the first time they run (can be hundreds of MB), so that first image is slow">Preprocessor</label>
+          <select id="controlnetPreprocessor"></select>
+        </div>
+        <div class="settings-group">
+          <label class="settings-label" for="controlnetResolution" title="Resolution the preprocessor works at (the map is scaled back to the image's size). Higher picks up finer detail but is slower; model-based preprocessors need more VRAM">Detect Resolution</label>
+          <select id="controlnetResolution">
+            <option value="512">512</option>
+            <option value="768">768</option>
+            <option value="1024">1024</option>
+            <option value="1536">1536</option>
+            <option value="2048">2048</option>
+          </select>
+        </div>
+        <div id="controlnetOptions"></div>
+        <div id="controlnetStatus" class="workflow-hint stage-hint" hidden></div>
+        </div>
+      </div>
+
+      <div id="upscaleSettings" class="stage" data-stage="upscale" hidden>
+        <div class="settings-stage">Upscale</div>
+        <div class="stage-body">
+          <div class="settings-group">
+            <label class="settings-label" for="upscaleModel" title="Upscale models in ComfyUI's models/upscale_models. The Nomos JPG model suits photos and also cleans up JPEG artefacts">Model</label>
+            <select id="upscaleModel"></select>
+          </div>
+          <div class="settings-group">
+            <label class="settings-label" for="upscaleScale" title="How many times larger the result is. Capped so the longest side is at most 4096px">Scale</label>
+            <select id="upscaleScale">
+              <option value="1">1&times; (enhance only)</option>
+              <option value="2">2&times;</option>
+              <option value="3">3&times;</option>
+              <option value="4">4&times;</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="backgroundSettings" class="stage" data-stage="background" hidden>
+        <div class="settings-stage">Background</div>
+        <div class="stage-body">
+          <div class="settings-group">
+            <label class="settings-label" for="backgroundMode" title="BiRefNet finds the subject. Transparent saves a PNG cut-out; Colour puts the subject on a solid colour; Blur keeps the subject sharp over a blurred background, like a phone's portrait mode">Background</label>
+            <select id="backgroundMode">
+              <option value="transparent">Transparent</option>
+              <option value="color">Solid colour</option>
+              <option value="blur">Blur</option>
+            </select>
+          </div>
+          <div class="settings-group" id="backgroundColorGroup" hidden>
+            <label class="settings-label" for="backgroundColor">Colour</label>
+            <input type="color" id="backgroundColor" value="#ffffff">
+          </div>
+          <div class="settings-group" id="backgroundBlurGroup" hidden>
+            <label class="settings-label" title="How blurred the background is; 100% blurs by 3% of the image's short side">Blur Strength</label>
+            <input type="range" id="backgroundBlur" min="5" max="100" step="5" value="50">
+            <span class="range-value">50%</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="restoreSettings" class="stage" data-stage="restore" hidden>
+        <div class="settings-stage">Face Restore</div>
+        <div class="stage-body">
+          <div class="settings-group">
+            <label class="settings-label" for="restoreModel" title="GFPGAN v1.4 gives clean, natural faces; v1.3 is a little softer">Model</label>
+            <select id="restoreModel">
+              <option value="GFPGANv1.4.pth">GFPGAN v1.4</option>
+              <option value="GFPGANv1.3.pth">GFPGAN v1.3</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label class="settings-label" title="How much of the restored face is blended over the original">Strength</label>
+            <input type="range" id="restoreStrength" min="10" max="100" step="5" value="100">
+            <span class="range-value">100%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- One of the user's own workflows: the settings chosen for it on the My workflows page (popup.js builds them) -->
+      <div id="customSettings" class="stage" data-stage="custom" hidden>
+        <div class="settings-stage">Settings</div>
+        <div class="stage-body">
+          <div id="customOptions"></div>
+          <div id="customStatus" class="workflow-hint stage-hint" hidden></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="accordion">
+    <div class="accordion-header" id="settingsAccordionHeader">
+      <span>Settings</span>
+      <span class="accordion-icon">^</span>
+    </div>
+    <div class="accordion-content" id="settingsAccordionContent">
+      <div class="settings-group">
+        <label class="settings-label" for="processingMode" title="Where images are processed: on your own ComfyUI (the extension builds the workflow), or on the img2img server (it builds the workflow and runs it on its GPUs)">Processing</label>
+        <select id="processingMode">
+          <option value="server">img2img server</option>
+          <option value="local">My ComfyUI</option>
+        </select>
+      </div>
+      <div class="settings-group" id="devServerGroup" hidden>
+        <label class="settings-label" for="devServer" title="Development installs only: the live API, or a local server (npm start in server/) at 127.0.0.1:8787. Each has its own API key.">Server (development)</label>
+        <select id="devServer">
+          <option value="live">Live (api.img2img.live)</option>
+          <option value="local">Local (127.0.0.1:8787)</option>
+        </select>
+      </div>
+      <div class="settings-group" id="img2imgApiKeyGroup">
+        <label class="settings-label" for="img2imgApiKey" title="A key from the API keys page of your img2img account: jobs are charged to that account's credits">API Key</label>
+        <input type="password" id="img2imgApiKey" placeholder="i2i_…" autocomplete="off" spellcheck="false">
+        <div id="img2imgAccountStatus" class="workflow-hint"></div>
+      </div>
+      <div class="settings-group" id="comfyServerGroup" hidden>
+        <label class="settings-label" for="comfyServerAddress">ComfyUI Server Address</label>
+        <input type="text" id="comfyServerAddress" placeholder="http://127.0.0.1:8188">
+      </div>
+      <div class="settings-group">
+        <div class="auto-process-toggle" style="margin-top: 0;">
+          <label class="switch">
+            <input type="checkbox" id="openInNewTabToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Open each newly converted image in a background tab next to the current one">Open Results in New Tab</span>
+        </div>
+        <div class="auto-process-toggle">
+          <label class="switch">
+            <input type="checkbox" id="downloadAsJpgToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Save downloaded images as JPG (smaller files) instead of PNG">Download as JPG</span>
+        </div>
+        <div class="auto-process-toggle">
+          <label class="switch">
+            <input type="checkbox" id="darkModeToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Dark colours for the popup and every img2img page (cached images, results, comparisons, My workflows). Until it's switched, it follows your system">Dark Mode</span>
+        </div>
+        <div class="auto-process-toggle" id="devAutoReloadRow" hidden>
+          <label class="switch">
+            <input type="checkbox" id="devAutoReloadToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Reload the extension when tools/dev-reload.js reports a file change. Only for unpacked installs; run the watcher first">Dev Auto-Reload</span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <label class="settings-label" for="cacheSize" title="How many processed images the cache keeps for Swap Cache and the cached images page. The oldest go first; each one can take a few MB">Cache Size</label>
+        <select id="cacheSize">
+          <option value="25">25 images</option>
+          <option value="50" selected>50 images</option>
+          <option value="100">100 images</option>
+          <option value="200">200 images</option>
+          <option value="500">500 images</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <button id="purgeCache" title="Delete all cached converted images, so images are converted again with the current settings and workflow">Purge Cache</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="button-group">
+      <button id="startSelection">Manual Selection</button>
+      <button id="selectAllVisible">Automatic Selection</button>
+    </div>
+    <button id="viewCache" class="link-button" title="A slideshow of the images processed before (the cache keeps as many as the Cache Size setting)">View cached images&hellip;</button>
+    <div class="status-section">
+      <div class="status" id="status"></div>
+      <div class="toggle-grid">
+        <div class="auto-process-toggle">
+          <label class="switch">
+            <input type="checkbox" id="autoProcessToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Automatically start processing visible images when page loads">Auto-process</span>
+        </div>
+        <div class="auto-process-toggle">
+          <label class="switch">
+            <input type="checkbox" id="autoRememberToggle">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label" title="Replace cached images immediately when page loads">Swap Cache</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="shared/workflows.js"></script>
+  <script src="shared/custom-workflows.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html> 

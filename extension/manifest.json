@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "img2img",
+  "version": "1.0.4",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyozoDwDWdEdAxhGzBhP018h4ikOBS8M5cFMPxIf+ZWsHUMH4sTXQWMuqoisSPkata5M331RQ7AWAHmRcNEL7hEDV10MBVOVOTF5OtdxC8mFqvXxHRYmq/pM1zcmgo5LskBsVGi8YdAnwX1Ju/sunOONRpMMwVS3OozvNt/2l6r3PQ1elxE3PNIC/pBY3NfZXvi7+YxPLivAxe1dsOWzE0daN3aH7PHcRpHYlsMJ32Nx+sBpVmToNRS5e1+m9mSc02Yk2wx7LFFCwG9uj4A8/y9RT7f+UsSaNp7vmvciqAU38Ikudn6sHrzC6Q0sQLHXem3QVzjLT/cdLnMXycPnPUQIDAQAB",
+  "description": "Edit images on any web page: remove or replace backgrounds, upscale, restore old photos and make reference maps.",
+  "homepage_url": "https://img2img.shop",
+  "permissions": [
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8188/*",
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["shared/workflows.js", "shared/custom-workflows.js", "content.js"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+} 

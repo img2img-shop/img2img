@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>img2img comparison</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f2f3;
+      --text: #3a3a3a;
+      --strong: #111;
+      --muted: #6b6b6b;
+      --panel: #ffffff;
+      --strip: #f8f8f9;
+      --border: #dcdcdf;
+      --control-border: #c8c8cc;
+      --thumb: #e4e4e7;
+      --nav-bg: rgba(0, 0, 0, 0.08);
+      --nav-fg: #333;
+      --link: #1a5fd0;
+      --scroll: #c4c4c8;
+      --scroll-hover: #a0a0a6;
+      --checker-a: #e4e4e7;
+      --checker-b: #f4f4f5;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0e0e0e;
+      --text: #ccc;
+      --strong: #fff;
+      --muted: #999;
+      --panel: #171717;
+      --strip: #121212;
+      --border: #262626;
+      --control-border: #404040;
+      --thumb: #262626;
+      --nav-bg: rgba(255, 255, 255, 0.15);
+      --nav-fg: #fff;
+      --link: #8ab4f8;
+      --scroll: #3a3a3a;
+      --scroll-hover: #555;
+      --checker-a: #262626;
+      --checker-b: #1c1c1c;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+    main {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+    /* Narrow windows: one above the other */
+    @media (max-aspect-ratio: 1/1) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr 1fr;
+      }
+    }
+    /* The two images meet in the middle: each is pushed against the other's side of its half (above and below
+       in a narrow window), with its caption centred under it */
+    figure:first-child {
+      align-items: flex-end;
+    }
+    figure:last-child {
+      align-items: flex-start;
+    }
+    figure:first-child .frame {
+      justify-content: flex-end;
+    }
+    figure:last-child .frame {
+      justify-content: flex-start;
+    }
+    @media (max-aspect-ratio: 1/1) {
+      figure:first-child, figure:last-child {
+        align-items: center;
+      }
+      figure:first-child .frame, figure:last-child .frame {
+        justify-content: center;
+      }
+      figure:first-child .frame {
+        align-items: flex-end;
+      }
+      figure:last-child .frame {
+        align-items: flex-start;
+      }
+    }
+    figure {
+      margin: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    /* (the same height with or without the Download button, so both images get the same room) */
+    figcaption {
+      min-height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-size: 13px;
+      text-align: center;
+    }
+    figcaption b {
+      color: var(--strong);
+    }
+    /* Downloads the processed image with the same name as the other download buttons (the browser's own
+       "Save image as" would call it "download", since the image has no file name) */
+    #download {
+      margin-left: 10px;
+      padding: 3px 10px;
+      border: none;
+      border-radius: 12px;
+      background: var(--nav-bg);
+      color: var(--nav-fg);
+      font: inherit;
+      cursor: pointer;
+    }
+    /* Dark mode, shared with the popup and the other extension pages */
+    .theme-toggle {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--nav-bg);
+      color: var(--nav-fg);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+    }
+    .theme-toggle:hover,
+    #download:hover:not(:disabled) {
+      background: rgba(52, 113, 219, 0.9);
+    }
+    #download:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    /* Each image is drawn as large as fits its half (compare.js sizes it), so a small original is shown enlarged
+       next to an upscale. The checkerboard is behind the image only, and shows through transparent results. */
+    .frame {
+      align-self: stretch;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+    }
+    img {
+      display: block;
+      width: 0;
+      height: 0;
+      border-radius: 6px;
+      background: repeating-conic-gradient(var(--checker-a) 0% 25%, var(--checker-b) 0% 50%) 50% / 24px 24px;
+    }
+    #message {
+      margin: auto;
+      padding: 24px;
+      text-align: center;
+    }
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main id="compare" hidden>
+    <figure>
+      <div class="frame"><img id="original" alt="Original image"></div>
+      <figcaption><b>Original</b> <span id="originalSize"></span></figcaption>
+    </figure>
+    <figure>
+      <div class="frame"><img id="result" alt="Processed image"></div>
+      <figcaption><b>Processed</b> <span id="resultSize"></span> <button id="download" title="Download processed image">Download</button></figcaption>
+    </figure>
+  </main>
+  <p id="message" hidden></p>
+  <script src="compare.js"></script>
+</body>
+</html>
