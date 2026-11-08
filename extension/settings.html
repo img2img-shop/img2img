@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings - img2img</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    [hidden] {
+      display: none !important;
+    }
+    /* Until settings.js has read the saved values, nothing shows and nothing animates, so no switch flicks
+       over while the page is already up */
+    body.loading main {
+      visibility: hidden;
+    }
+    body.loading *, body.loading *::before, body.loading *::after {
+      transition: none !important;
+    }
+    body {
+      margin: 0;
+      background: #f6f6f6;
+      color: #222;
+      font: 14px/1.45 Arial, sans-serif;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    header img {
+      height: 36px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 16px;
+    }
+    .intro {
+      margin: 0 0 20px;
+      color: #666;
+    }
+    .card {
+      margin-bottom: 16px;
+      padding: 18px;
+      border: 1px solid #e2e2e2;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .muted {
+      color: #888;
+      font-size: 12px;
+    }
+    label.field {
+      display: block;
+      margin: 16px 0 4px;
+      color: #555;
+      font-size: 13px;
+    }
+    input[type="text"], select, textarea {
+      width: 100%;
+      max-width: 420px;
+      padding: 7px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font: 14px/1.4 Arial, sans-serif;
+      box-sizing: border-box;
+    }
+    textarea {
+      resize: vertical;
+    }
+    /* One row per "a workflow for a site" rule: the site, the workflow it uses, and a button to drop it */
+    .rule-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .rule-row input[type="text"] {
+      flex: 1 1 180px;
+      max-width: none;
+    }
+    .rule-row select {
+      flex: 1 1 200px;
+      max-width: none;
+    }
+    .field-hint {
+      margin: 6px 0 0;
+    }
+    /* The "File Name" tokens: click one to put it in the pattern, click it again to take it out */
+    .token-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 420px;
+      margin: 8px 0 0;
+    }
+    .token-row button {
+      padding: 4px 10px;
+      border: 1px solid #ddd;
+      border-radius: 999px;
+      background: #fafafa;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+    .token-row button:hover {
+      background: #ededed;
+    }
+    .token-row button.in-use {
+      border-color: #90caf9;
+      background: #e3f2fd;
+      color: #1565c0;
+    }
+    button {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 4px;
+      background: #f0f0f0;
+      color: #333;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #e4e4e4;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    button.danger {
+      color: #c62828;
+    }
+    /* One row per toggle: the switch, its name, and a line saying what it does */
+    .toggle-row {
+      display: grid;
+      grid-template-columns: 50px 1fr;
+      gap: 4px 12px;
+      padding: 10px 0;
+      border-top: 1px solid #f0f0f0;
+    }
+    .card > .toggle-row:first-of-type {
+      padding-top: 0;
+      border-top: none;
+    }
+    .toggle-label {
+      align-self: center;
+      font-size: 14px;
+    }
+    .toggle-desc {
+      grid-column: 2;
+      margin: 0;
+      color: #777;
+      font-size: 12px;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 50px;
+      height: 24px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+    }
+    input:checked + .slider {
+      background-color: #4CAF50;
+    }
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+    .slider.round {
+      border-radius: 34px;
+    }
+    .slider.round:before {
+      border-radius: 50%;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .status {
+      margin-top: 12px;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      background: #e8f5e9;
+      color: #1b5e20;
+    }
+    .status.error {
+      background: #ffebee;
+      color: #b71c1c;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+    }
+    :root[data-theme="dark"] body {
+      background: #141415;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] .intro {
+      color: #a0a0a0;
+    }
+    :root[data-theme="dark"] .muted, :root[data-theme="dark"] .toggle-desc {
+      color: #8f8f8f;
+    }
+    :root[data-theme="dark"] label.field {
+      color: #b4b4b4;
+    }
+    :root[data-theme="dark"] .card {
+      background: #1e1e20;
+      border-color: #333336;
+    }
+    :root[data-theme="dark"] .toggle-row {
+      border-color: #2e2e31;
+    }
+    :root[data-theme="dark"] input[type="text"], :root[data-theme="dark"] select {
+      background: #262628;
+      color: #e3e3e3;
+      border-color: #444448;
+    }
+    :root[data-theme="dark"] button {
+      background: #2e2e31;
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] button:hover {
+      background: #3a3a3e;
+    }
+    :root[data-theme="dark"] button.danger {
+      color: #fca5a5;
+    }
+    :root[data-theme="dark"] .token-row button {
+      background: #262628;
+      border-color: #444448;
+    }
+    :root[data-theme="dark"] .token-row button:hover {
+      background: #33333a;
+    }
+    :root[data-theme="dark"] .token-row button.in-use {
+      border-color: #2f5f8a;
+      background: #16293a;
+      color: #90caf9;
+    }
+    :root[data-theme="dark"] .status {
+      background: #16301a;
+      color: #a5d6a7;
+    }
+    :root[data-theme="dark"] .status.error {
+      background: #4a1717;
+      color: #fca5a5;
+    }
+  </style>
+</head>
+<body class="loading">
+  <main>
+    <header>
+      <img src="icons/icon48.png" alt="">
+      <h1>Settings</h1>
+    </header>
+    <p class="intro">
+      Every img2img setting, saved as you change it. The popup keeps the ones worth changing often &mdash; where images
+      are processed, your API key, and the three result settings repeated below.
+    </p>
+
+    <section class="card">
+      <h2>Results</h2>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="openInNewTabToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Open Results in New Tab</span>
+        <p class="toggle-desc">Each newly converted image opens in a background tab next to the current one.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="iconsOnHoverToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Show Icons on Hover</span>
+        <p class="toggle-desc">The icons over a converted image (download, show the original, compare, and delete in a result tab) wait until the pointer is over it, instead of showing for as long as the result does. A touch screen has no hover, so leave this off there.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="autoDownloadToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Download Results Automatically</span>
+        <p class="toggle-desc">Save each newly converted image as soon as it&rsquo;s done, like clicking its download button. Results swapped in from the cache aren&rsquo;t downloaded again.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="downloadAsJpgToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Download as JPG</span>
+        <p class="toggle-desc">Save downloaded images as JPG (smaller files) instead of PNG. Results with transparency stay PNG.</p>
+      </div>
+      <label class="field" for="jpgQuality">JPG Quality</label>
+      <select id="jpgQuality">
+        <option value="80">Smaller files</option>
+        <option value="92" selected>Balanced</option>
+        <option value="98">Best quality</option>
+      </select>
+      <p class="muted field-hint">Only for downloads saved as JPG. Balanced is what img2img has always used.</p>
+      <label class="field" for="downloadFolder">Download Folder</label>
+      <input type="text" id="downloadFolder" placeholder="img2img" spellcheck="false" autocomplete="off">
+      <p class="muted field-hint" id="downloadFolderHint"></p>
+      <label class="field" for="filenamePattern">File Name</label>
+      <input type="text" id="filenamePattern" placeholder="{title}-{workflow}-{source}" spellcheck="false" autocomplete="off">
+      <div class="token-row" id="filenameTokens"></div>
+      <p class="muted field-hint" id="filenamePatternHint"></p>
+    </section>
+
+    <section class="card">
+      <h2>Automatic Selection</h2>
+      <p class="muted" style="margin: -6px 0 0;">Automatic Selection and Auto-process convert every image on a page that qualifies, one after another. Manual Selection and the right-click menu are unaffected by all three.</p>
+      <label class="field" for="minImageSide">Smallest Image</label>
+      <select id="minImageSide">
+        <option value="100">100px</option>
+        <option value="200">200px</option>
+        <option value="300" selected>300px</option>
+        <option value="500">500px</option>
+        <option value="800">800px</option>
+      </select>
+      <p class="muted field-hint">Images smaller than this on either side are left alone, so thumbnails, avatars and sprites don't cost a job. Raise it on image-heavy sites; lower it if a site's photos are small and nothing happens.</p>
+      <label class="field" for="autoAskOver">Ask Before</label>
+      <select id="autoAskOver">
+        <option value="0">Never ask</option>
+        <option value="10">More than 10 images</option>
+        <option value="20" selected>More than 20 images</option>
+        <option value="50">More than 50 images</option>
+      </select>
+      <p class="muted field-hint">On a page with more images than this, the popup says how many it found and what they cost before starting.</p>
+      <label class="field" for="autoStopAfter">Stop After</label>
+      <select id="autoStopAfter">
+        <option value="0" selected>No limit</option>
+        <option value="10">10 images</option>
+        <option value="25">25 images</option>
+        <option value="50">50 images</option>
+        <option value="100">100 images</option>
+      </select>
+      <p class="muted field-hint">A hard cap for each run, counted per page. The page says so when it stops.</p>
+    </section>
+
+    <section class="card">
+      <h2>Sites</h2>
+      <label class="field" for="blockedSites">Never Run On</label>
+      <textarea id="blockedSites" rows="3" placeholder="example.com" spellcheck="false" autocomplete="off"></textarea>
+      <p class="muted field-hint">One site a line. img2img does nothing at all on these: no selection, no right-click item, no Auto-process, no Swap Cache. A site covers its subdomains, and * stands for any part of a host (*.wikipedia.org).</p>
+      <label class="field" for="automaticSites">Automatic Only On</label>
+      <textarea id="automaticSites" rows="3" placeholder="Empty: every site" spellcheck="false" autocomplete="off"></textarea>
+      <p class="muted field-hint">With anything here, Auto-process and Swap Cache only start by themselves on these sites. Manual and Automatic Selection still work everywhere else, when you ask for them.</p>
+      <label class="field">A Workflow for a Site</label>
+      <p class="muted field-hint">Pages on these sites use the workflow named here instead of the one chosen in the popup, so an archive can restore photos while everything else upscales them. The first rule that covers a site wins; the popup says when one applies.</p>
+      <div id="siteWorkflowRules"></div>
+      <div class="row">
+        <button id="addSiteWorkflow">Add a site&hellip;</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Cache</h2>
+      <label class="field" for="cacheSize">Cache Size</label>
+      <select id="cacheSize">
+        <option value="25">25 images</option>
+        <option value="50" selected>50 images</option>
+        <option value="100">100 images</option>
+        <option value="200">200 images</option>
+        <option value="500">500 images</option>
+      </select>
+      <p class="muted field-hint">How many processed images the cache keeps for Swap Cache and the cached images page. The oldest go first; each one can take a few MB.</p>
+      <label class="field" for="cacheKeepDays">Delete Results Older Than</label>
+      <select id="cacheKeepDays">
+        <option value="0" selected>Never (keep until the cache is full)</option>
+        <option value="1">A day</option>
+        <option value="7">A week</option>
+        <option value="30">A month</option>
+      </select>
+      <div class="toggle-row" style="margin-top: 16px;">
+        <label class="switch">
+          <input type="checkbox" id="cacheClearOnStartupToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Clear the Cache When the Browser Starts</span>
+        <p class="toggle-desc">For a shared computer: results are kept only for as long as the browser is open. Results still go to the cache while it runs, because result tabs and the compare view read them from there.</p>
+      </div>
+      <div class="row">
+        <button id="purgeCache" class="danger" title="Delete all cached converted images, so images are converted again with the current settings and workflow">Purge Cache</button>
+        <button id="viewCache">View cached images&hellip;</button>
+      </div>
+      <div class="status" id="cacheStatus" hidden></div>
+    </section>
+
+    <section class="card">
+      <h2>My ComfyUI</h2>
+      <label class="field" for="comfyServerAddress">ComfyUI Server Address</label>
+      <input type="text" id="comfyServerAddress" placeholder="http://127.0.0.1:8188" spellcheck="false" autocomplete="off">
+      <p class="muted field-hint">Used when Processing is set to My ComfyUI, which is chosen in the popup. Empty means http://127.0.0.1:8188.</p>
+      <label class="field" for="jobsAtOnce">Jobs at Once</label>
+      <select id="jobsAtOnce">
+        <option value="1" selected>One at a time</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select>
+      <p class="muted field-hint">How many images your own ComfyUI is given at the same time. More than one suits a card that finishes a job without using all of it; too many and they only slow each other down. The img2img server always takes one at a time, whatever this says.</p>
+      <div class="row">
+        <button id="manageWorkflows">My workflows: add or edit&hellip;</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Extension</h2>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="darkModeToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Dark Mode</span>
+        <p class="toggle-desc">Dark colours for the popup and every img2img page (cached images, results, comparisons, My workflows). Until it&rsquo;s switched, it follows your system.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="announcementsToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Announcements</span>
+        <p class="toggle-desc">Ask img2img.shop once a day whether there&rsquo;s anything to tell you, such as a new feature or a problem with the service, and show it at the top of the popup. The request says nothing about you, your settings or your images, not even which version you have.</p>
+      </div>
+      <div class="toggle-row" id="devAutoReloadRow" hidden>
+        <label class="switch">
+          <input type="checkbox" id="devAutoReloadToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Dev Auto-Reload</span>
+        <p class="toggle-desc">Reload the extension when tools/dev-reload.js reports a file change. Only for unpacked installs; run the watcher first.</p>
+      </div>
+      <label class="field">Settings Backup</label>
+      <p class="muted field-hint">A file of every setting on this page and in the popup, to carry to another browser. Your API key is left out, and so are your sources (the popup's Source section exports those).</p>
+      <div class="row">
+        <button id="exportSettings">Export settings&hellip;</button>
+        <button id="importSettings">Import settings&hellip;</button>
+        <input type="file" id="importSettingsInput" accept=".json,application/json" hidden>
+      </div>
+      <div class="status" id="backupStatus" hidden></div>
+    </section>
+  </main>
+  <script src="shared/workflows.js"></script>
+  <script src="shared/custom-workflows.js"></script>
+  <script src="shared/sites.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

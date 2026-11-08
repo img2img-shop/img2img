@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>img2img result</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f2f3;
+      --text: #3a3a3a;
+      --strong: #111;
+      --muted: #6b6b6b;
+      --panel: #ffffff;
+      --strip: #f8f8f9;
+      --border: #dcdcdf;
+      --control-border: #c8c8cc;
+      --thumb: #e4e4e7;
+      --nav-bg: rgba(0, 0, 0, 0.08);
+      --nav-fg: #333;
+      --link: #1a5fd0;
+      --scroll: #c4c4c8;
+      --scroll-hover: #a0a0a6;
+      --checker-a: #e4e4e7;
+      --checker-b: #f4f4f5;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0e0e0e;
+      --text: #ccc;
+      --strong: #fff;
+      --muted: #999;
+      --panel: #171717;
+      --strip: #121212;
+      --border: #262626;
+      --control-border: #404040;
+      --thumb: #262626;
+      --nav-bg: rgba(255, 255, 255, 0.15);
+      --nav-fg: #fff;
+      --link: #8ab4f8;
+      --scroll: #3a3a3a;
+      --scroll-hover: #555;
+      --checker-a: #262626;
+      --checker-b: #1c1c1c;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* The buttons sit on the image's top-right corner, like the on-page ones (the window can be much wider
+       than a portrait image): download, with the original/result toggle, compare and delete under it */
+    #frame {
+      position: relative;
+      line-height: 0;
+    }
+    img {
+      max-width: 100vw;
+      max-height: 100vh;
+      object-fit: contain;
+    }
+    #frame button {
+      position: absolute;
+      right: 12px;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* The icons come from content.js, so they're sized here rather than in their markup */
+    #frame button svg {
+      width: 20px;
+      height: 20px;
+    }
+    /* Each under the one before it; a hidden button leaves its place empty, like the on-page buttons do */
+    #download { top: 12px; }
+    #revert { top: 58px; }
+    #compare { top: 104px; }
+    #delete { top: 150px; }
+    #frame.no-original #delete { top: 58px; }
+    /* Dark mode, shared with the popup and the other extension pages */
+    .theme-toggle {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--nav-bg);
+      color: var(--nav-fg);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .theme-toggle:hover,
+    #frame button:hover:not(:disabled) {
+      background: rgba(52, 113, 219, 0.9);
+    }
+    #delete:hover:not(:disabled) {
+      background: rgba(198, 40, 40, 0.9);
+    }
+    #frame button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    /* "Show Icons on Hover" (resultIconsOnHover, set in All settings): the buttons wait for the pointer to be
+       over the image, as the icons on a page do. Set on #frame by viewer.js. */
+    #frame.on-hover button {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s;
+    }
+    #frame.on-hover:hover button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #frame.on-hover:hover button:disabled {
+      opacity: 0.45;
+    }
+    #message {
+      font-size: 15px;
+      text-align: center;
+      line-height: 1.5;
+    }
+    /* Asks before deleting, unless "Don't ask again" was ticked (here or on the cache page) */
+    #confirmDelete {
+      padding: 20px 22px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+    #confirmDelete::backdrop {
+      background: rgba(0, 0, 0, 0.45);
+    }
+    #confirmDelete p {
+      margin: 0 0 14px;
+      color: var(--strong);
+    }
+    #confirmDelete label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    #confirmDelete .buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    #confirmDelete button {
+      padding: 7px 16px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    #confirmDelete button[value="delete"] {
+      border-color: #c62828;
+      background: #c62828;
+      color: #fff;
+    }
+    #confirmDelete button[value="delete"]:hover {
+      background: #b71c1c;
+    }
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="frame">
+    <button id="download" title="Download processed image" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+    </button>
+    <!-- The toggle between the original image and the result, and the side-by-side comparison, as on the page
+         (their icons are set in viewer.js, from content.js's) -->
+    <button id="revert" hidden></button>
+    <button id="compare" title="Compare with the original, side by side" hidden></button>
+    <button id="delete" title="Delete from the cache (Delete key)" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+    </button>
+    <img id="result" alt="Swapped image" hidden>
+  </div>
+  <p id="message" hidden></p>
+  <dialog id="confirmDelete">
+    <form method="dialog">
+      <p>Delete this image from the cache?</p>
+      <label><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
+      <div class="buttons">
+        <button value="cancel">Cancel</button>
+        <button value="delete" autofocus>Delete</button>
+      </div>
+    </form>
+  </dialog>
+  <!-- The content script too, which Chrome doesn't inject into extension pages: Manual Selection works on the result
+       (see viewer.js) -->
+  <script src="shared/workflows.js"></script>
+  <script src="shared/custom-workflows.js"></script>
+  <script src="shared/images.js"></script>
+  <script src="shared/sites.js"></script>
+  <script src="content.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>

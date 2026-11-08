@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Cached images - img2img</title>
+  <script src="shared/theme.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f2f3;
+      --text: #3a3a3a;
+      --strong: #111;
+      --muted: #6b6b6b;
+      --panel: #ffffff;
+      --strip: #f8f8f9;
+      --border: #dcdcdf;
+      --control-border: #c8c8cc;
+      --thumb: #e4e4e7;
+      --nav-bg: rgba(0, 0, 0, 0.08);
+      --nav-fg: #333;
+      --link: #1a5fd0;
+      --scroll: #c4c4c8;
+      --scroll-hover: #a0a0a6;
+      --checker-a: #e4e4e7;
+      --checker-b: #f4f4f5;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0e0e0e;
+      --text: #ccc;
+      --strong: #fff;
+      --muted: #999;
+      --panel: #171717;
+      --strip: #121212;
+      --border: #262626;
+      --control-border: #404040;
+      --thumb: #262626;
+      --nav-bg: rgba(255, 255, 255, 0.15);
+      --nav-fg: #fff;
+      --link: #8ab4f8;
+      --scroll: #3a3a3a;
+      --scroll-hover: #555;
+      --checker-a: #262626;
+      --checker-b: #1c1c1c;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+    #stage {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* The download button sits on the image's top-right corner like the result viewer's, with delete under it as
+       the on-page buttons are stacked */
+    #frame {
+      position: relative;
+      line-height: 0;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #image {
+      max-width: calc(100vw - 140px);
+      max-height: calc(100vh - 250px);
+      object-fit: contain;
+    }
+    /* The logo, linking to the site, in the top-left corner (the dark one in dark mode) */
+    #logo {
+      position: absolute;
+      top: 14px;
+      left: 20px;
+      z-index: 1;
+      line-height: 0;
+    }
+    #logo img {
+      height: 48px;
+    }
+    #logo .logo-dark,
+    :root[data-theme="dark"] #logo .logo-light {
+      display: none;
+    }
+    :root[data-theme="dark"] #logo .logo-dark {
+      display: block;
+    }
+    .round {
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--nav-bg);
+      color: var(--nav-fg);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .round:hover:not(:disabled) {
+      background: rgba(52, 113, 219, 0.9);
+      color: #fff;
+    }
+    /* On the image: dark in both themes, so they show on light images too */
+    .actions .round {
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    }
+    #delete:hover:not(:disabled) {
+      background: rgba(198, 40, 40, 0.9);
+    }
+    .actions {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 48px;
+      height: 48px;
+    }
+    #prev { left: 16px; }
+    #next { right: 16px; }
+    /* Thumbnails of the whole cache, the current one outlined */
+    #strip {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      overflow-x: auto;
+      background: var(--strip);
+      border-top: 1px solid var(--border);
+      scrollbar-width: thin;
+      scrollbar-color: var(--scroll) transparent;
+    }
+    #strip:hover {
+      scrollbar-color: var(--scroll-hover) transparent;
+    }
+    /* Older Chromium, which ignores scrollbar-color */
+    #strip::-webkit-scrollbar {
+      height: 8px;
+    }
+    #strip::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #strip::-webkit-scrollbar-thumb {
+      background: var(--scroll);
+      border-radius: 4px;
+    }
+    #strip::-webkit-scrollbar-thumb:hover {
+      background: var(--scroll-hover);
+    }
+    .thumb {
+      flex: none;
+      width: 64px;
+      height: 48px;
+      padding: 0;
+      border: 2px solid transparent;
+      border-radius: 4px;
+      background: var(--thumb) center / cover no-repeat;
+      cursor: pointer;
+      opacity: 0.7;
+    }
+    .thumb:hover {
+      opacity: 1;
+    }
+    .thumb[aria-current="true"] {
+      border-color: #16a34a;
+      opacity: 1;
+    }
+    #bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 20px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+    }
+    #caption {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #caption strong {
+      color: var(--strong);
+      font-weight: 600;
+    }
+    #caption a {
+      color: var(--link);
+    }
+    #counter {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .modes {
+      display: flex;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .modes button {
+      padding: 6px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .modes button[aria-pressed="true"] {
+      background: #16a34a;
+      color: #fff;
+    }
+    select {
+      padding: 5px 6px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    #fullscreen, .theme-toggle {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+    }
+    /* Full screen is for the image: it fills the screen (as large as fits, keeping its shape), without the logo and
+       thumbnails. The bar and the arrows float over it and fade out while the mouse rests. */
+    :root:fullscreen #strip,
+    :root:fullscreen #logo {
+      display: none;
+    }
+    :root:fullscreen #image {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      max-height: none;
+    }
+    :root:fullscreen #bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 2;
+      transition: opacity 0.3s;
+    }
+    :root:fullscreen .nav {
+      z-index: 2;
+      transition: opacity 0.3s;
+      /* over the image now, so dark like the buttons on it */
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    }
+    :root:fullscreen.idle #bar,
+    :root:fullscreen.idle .nav {
+      opacity: 0;
+      pointer-events: none;
+    }
+    :root:fullscreen.idle {
+      cursor: none;
+    }
+    /* Asks before deleting, unless "Don't ask again" was ticked */
+    #confirmDelete {
+      padding: 20px 22px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+    #confirmDelete::backdrop {
+      background: rgba(0, 0, 0, 0.45);
+    }
+    #confirmDelete p {
+      margin: 0 0 14px;
+      color: var(--strong);
+    }
+    #confirmDelete label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    #confirmDelete .buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    #confirmDelete button {
+      padding: 7px 16px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    #confirmDelete button[value="delete"] {
+      border-color: #c62828;
+      background: #c62828;
+      color: #fff;
+    }
+    #confirmDelete button[value="delete"]:hover {
+      background: #b71c1c;
+    }
+    #message {
+      font-size: 15px;
+      text-align: center;
+      line-height: 1.5;
+    }
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <a id="logo" href="https://img2img.shop" target="_blank" rel="noopener" title="img2img.shop">
+      <img class="logo-light" src="icons/logo.svg" alt="img2img, Browser Extension">
+      <img class="logo-dark" src="icons/logo-dark.svg" alt="img2img, Browser Extension">
+    </a>
+    <button id="prev" class="round nav" title="Previous (Left arrow)" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div id="frame" hidden>
+      <div class="actions">
+        <button id="download" class="round" title="Download processed image">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+        </button>
+        <button id="delete" class="round" title="Delete from the cache (Delete key)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        </button>
+      </div>
+      <img id="image" alt="Processed image">
+    </div>
+    <p id="message" hidden></p>
+    <button id="next" class="round nav" title="Next (Right arrow)" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+  </div>
+  <div id="strip" role="listbox" aria-label="Cached images" hidden></div>
+  <div id="bar" hidden>
+    <div id="caption"></div>
+    <span id="counter"></span>
+    <div class="modes" role="group" aria-label="Slideshow">
+      <button id="manual" aria-pressed="true" title="Step through with the arrows (or the arrow keys)">Manual</button>
+      <button id="auto" aria-pressed="false" title="Go to the next image every few seconds (Space switches)">Auto</button>
+    </div>
+    <select id="interval" aria-label="Seconds per image" title="Seconds per image" hidden>
+      <option value="2">2 s</option>
+      <option value="3">3 s</option>
+      <option value="5">5 s</option>
+      <option value="10">10 s</option>
+      <option value="30">30 s</option>
+    </select>
+    <span id="themeSlot"></span>
+    <button id="fullscreen" class="round" title="Full screen (F)">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path id="fullscreenIcon" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+    </button>
+  </div>
+  <dialog id="confirmDelete">
+    <form method="dialog">
+      <p>Delete this image from the cache?</p>
+      <label><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
+      <div class="buttons">
+        <button value="cancel">Cancel</button>
+        <button value="delete" autofocus>Delete</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="cache.js"></script>
+</body>
+</html>
