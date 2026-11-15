@@ -326,7 +326,23 @@
           <span class="slider round"></span>
         </label>
         <span class="toggle-label">Download as JPG</span>
-        <p class="toggle-desc">Save downloaded images as JPG (smaller files) instead of PNG. Results with transparency stay PNG.</p>
+        <p class="toggle-desc">Save downloaded images as JPG (smaller files) instead of PNG. Results with transparency stay PNG, and so do results of your own workflows while Keep Workflow in Results is on.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="keepWorkflowToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Keep Workflow in Results</span>
+        <p class="toggle-desc">Results of your own workflows keep the workflow ComfyUI writes into the image, with the page image, the source images and the settings used, so dropping one into ComfyUI opens the workflow that made it. They then download as PNG, since a JPG can&rsquo;t carry it.</p>
+      </div>
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="downloadOriginalToggle">
+          <span class="slider round"></span>
+        </label>
+        <span class="toggle-label">Double Download</span>
+        <p class="toggle-desc">Downloading a result saves the original image as well, next to the result and named like it with <code>-original</code> in place of <code>-img2img</code>, from the download button and with Download Results Automatically. The original is saved as it is, in its own format.</p>
       </div>
       <label class="field" for="jpgQuality">JPG Quality</label>
       <select id="jpgQuality">
@@ -384,7 +400,7 @@
       <textarea id="automaticSites" rows="3" placeholder="Empty: every site" spellcheck="false" autocomplete="off"></textarea>
       <p class="muted field-hint">With anything here, Auto-process and Swap Cache only start by themselves on these sites. Manual and Automatic Selection still work everywhere else, when you ask for them.</p>
       <label class="field">A Workflow for a Site</label>
-      <p class="muted field-hint">Pages on these sites use the workflow named here instead of the one chosen in the popup, so an archive can restore photos while everything else upscales them. The first rule that covers a site wins; the popup says when one applies.</p>
+      <p class="muted field-hint">Pages on these sites open with the workflow named here instead of the one chosen in the popup, so an archive can restore photos while everything else upscales them; another one picked in the popup while on such a page runs there until the page is loaded again. The first rule that covers a site wins.</p>
       <div id="siteWorkflowRules"></div>
       <div class="row">
         <button id="addSiteWorkflow">Add a site&hellip;</button>
@@ -415,7 +431,7 @@
           <span class="slider round"></span>
         </label>
         <span class="toggle-label">Clear the Cache When the Browser Starts</span>
-        <p class="toggle-desc">For a shared computer: results are kept only for as long as the browser is open. Results still go to the cache while it runs, because result tabs and the compare view read them from there.</p>
+        <p class="toggle-desc">For a shared computer: results are kept only for as long as the browser is open. Results still go to the cache while it runs, because result tabs read them from there.</p>
       </div>
       <div class="row">
         <button id="purgeCache" class="danger" title="Delete all cached converted images, so images are converted again with the current settings and workflow">Purge Cache</button>
@@ -450,7 +466,7 @@
           <span class="slider round"></span>
         </label>
         <span class="toggle-label">Dark Mode</span>
-        <p class="toggle-desc">Dark colours for the popup and every img2img page (cached images, results, comparisons, My workflows). Until it&rsquo;s switched, it follows your system.</p>
+        <p class="toggle-desc">Dark colours for the popup and every img2img page (cached images, results, My workflows). Until it&rsquo;s switched, it follows your system.</p>
       </div>
       <div class="toggle-row">
         <label class="switch">
@@ -458,7 +474,7 @@
           <span class="slider round"></span>
         </label>
         <span class="toggle-label">Announcements</span>
-        <p class="toggle-desc">Ask img2img.shop once a day whether there&rsquo;s anything to tell you, such as a new feature or a problem with the service, and show it at the top of the popup. The request says nothing about you, your settings or your images, not even which version you have.</p>
+        <p class="toggle-desc">Ask img2img.shop whether there&rsquo;s anything to tell you, such as a new feature or a problem with the service, and show it at the top of the popup. It asks once a day, and in between only if it hasn&rsquo;t asked in the last 15 minutes: when you open the popup, and when an image can&rsquo;t be edited because the img2img service can&rsquo;t be reached (the message on the page then says if there&rsquo;s a known problem). The request says nothing about you, your settings or your images, not even which version you have.</p>
       </div>
       <div class="toggle-row" id="devAutoReloadRow" hidden>
         <label class="switch">

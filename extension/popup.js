@@ -32,6 +32,11 @@ function typicalWaitHint(ms) {
   return ` On the img2img server it usually takes ${wait}.`;
 }
 
+// As the Library page's workflow panel (popup.html?embedded): see :root.embedded in popup.html
+if (new URLSearchParams(location.search).has('embedded')) {
+  document.documentElement.classList.add('embedded');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   const startButton = document.getElementById('startSelection');
   const selectAllButton = document.getElementById('selectAllVisible');
@@ -105,6 +110,19 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.tabs.sendMessage(tabId, message, response => {
       void chrome.runtime.lastError;
       if (callback) callback(response);
+    });
+  }
+
+  // The workflow a site rule ("A Workflow for a Site") chose for the tab in front of the popup as its page loaded,
+  // which content.js reports with the tab's status ('' while the tab runs the popup's choice), is shown as the
+  // choice, since it's what runs there, without a word about the rule; a workflow picked here then runs on the
+  // page instead (popupWorkflowChosen), until the page is loaded again.
+  let tabFollowsPopup = false; // (a choice made here before the tab had answered counts over its answer)
+  // Tells the tab the popup's choice runs there from now on
+  function popupWorkflowChosen() {
+    tabFollowsPopup = true;
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+      if (tabs[0]) sendToTab(tabs[0].id, { action: 'followPopupWorkflow' });
     });
   }
 
@@ -201,23 +219,44 @@ document.addEventListener('DOMContentLoaded', function() {
       if (accordions[name]) setSectionOpen(name, open);
     }
   });
+  // A section opened at the bottom of the popup opens under the button bar, where it looks as if nothing happened:
+  // scroll what it holds into view above the bar, but never so far that its own header leaves the top
+  const actionsBar = document.querySelector('.actions-bar');
+  function revealSection(header, content) {
+    const hidden = content.getBoundingClientRect().bottom + 12 - actionsBar.getBoundingClientRect().top;
+    const room = header.getBoundingClientRect().top;
+    if (hidden > 0 && room > 0) window.scrollBy({ top: Math.min(hidden, room), behavior: 'smooth' });
+  }
   for (const [name, [header, content]] of Object.entries(accordions)) {
     header.addEventListener('click', () => {
       setSectionOpen(name, !content.classList.contains('active'));
+      if (content.classList.contains('active')) revealSection(header, content);
       chrome.storage.local.get('openSections', ({ openSections = {} }) => {
         chrome.storage.local.set({ openSections: { ...openSections, [name]: content.classList.contains('active') } });
       });
     });
   }
 
-  // Announcements from img2img.shop, fetched once a day by background.js: everything that applies to this version and
-  // hasn't been dismissed, newest first. Everything is drawn as text, never as markup, so nothing in it can run here.
+  // Announcements from img2img.shop, fetched by background.js once a day and as the popup opens: everything that
+  // applies to this version, hasn't been dismissed and hasn't ended, newest first. Everything is drawn as text, never
+  // as markup, so nothing in it can run here.
   const announcementsBox = document.getElementById('announcements');
   const ANNOUNCEMENTS_DISMISSED_KEPT = 50;
+  let announcementEndTimer = null;
 
   function showAnnouncements({ announcements, announcementsDismissed }) {
     const dismissed = Array.isArray(announcementsDismissed) ? announcementsDismissed : [];
-    const showing = (Array.isArray(announcements) ? announcements : []).filter(item => !dismissed.includes(item.id));
+    const now = Date.now();
+    const showing = (Array.isArray(announcements) ? announcements : [])
+      .filter(item => !dismissed.includes(item.id) && !(item.endsAt && Date.parse(item.endsAt) <= now));
+    // One that ends while the popup is open goes then
+    clearTimeout(announcementEndTimer);
+    const nextEnd = Math.min(...showing.map(item => (item.endsAt ? Date.parse(item.endsAt) : Infinity)));
+    if (Number.isFinite(nextEnd)) {
+      announcementEndTimer = setTimeout(() => {
+        chrome.storage.local.get(['announcements', 'announcementsDismissed'], showAnnouncements);
+      }, Math.min(nextEnd - now + 500, 2 ** 31 - 1));
+    }
     announcementsBox.textContent = '';
     announcementsBox.hidden = showing.length === 0;
     for (const item of showing) {
@@ -262,7 +301,9 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   chrome.storage.local.get(['announcements', 'announcementsDismissed'], showAnnouncements);
-  // A check can finish while the popup is open
+  // What's stored is shown at once; a check that's due runs now (background.js keeps to its Announcements setting) and
+  // its answer is drawn when it comes in
+  chrome.runtime.sendMessage({ action: 'refreshAnnouncements' }).catch(() => {});
   chrome.storage.onChanged.addListener(changes => {
     if (changes.announcements) {
       chrome.storage.local.get(['announcements', 'announcementsDismissed'], showAnnouncements);
@@ -284,7 +325,17 @@ document.addEventListener('DOMContentLoaded', function() {
     downloadAsJpgToggle.checked = downloadAsJpg !== false;
   });
   downloadAsJpgToggle.addEventListener('change', function() {
-    chrome.storage.local.set({ downloadAsJpg: this.checked });
+    const set = () => chrome.storage.local.set({ downloadAsJpg: this.checked });
+    if (!this.checked) return set();
+    // With Keep Workflow in Results on (settings page), results of the user's own workflows download as PNG whatever
+    // this says, since a JPG can't carry the workflow: say so first, as the settings page does. A no leaves it off.
+    chrome.storage.local.get('keepWorkflowInResult', ({ keepWorkflowInResult }) => {
+      if (keepWorkflowInResult === true && !confirm('Keep Workflow in Results is on. Results of your own workflows will keep downloading as PNG, since a JPG can\'t carry the workflow; everything else will download as JPG.\n\nTurn Download as JPG on?')) {
+        this.checked = false;
+        return;
+      }
+      set();
+    });
   });
 
   // The settings page has these three as well: follow it while both are open
@@ -730,6 +781,14 @@ document.addEventListener('DOMContentLoaded', function() {
         sourcesError = error;
         return [];
       });
+    // The tab's state (Automatic running, Manual Selection on, a workflow a site rule chose for it), asked for at
+    // the same time as the settings; a tab without the content script answers nothing
+    const tabStatus = new Promise(resolve => {
+      chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+        if (!tabs[0]) return resolve(undefined);
+        sendToTab(tabs[0].id, { action: 'checkProcessingStatus' }, resolve);
+      });
+    });
     try {
       const result = await new Promise(resolve => {
         chrome.storage.local.get(['selectedSourceId', 'isProcessing', 'autoProcess', 'autoRemember', 'workflow', 'controlnetPreprocessor', 'controlnetResolution', 'controlnetOptions', 'upscaleModel', 'upscaleScale', 'backgroundMode', 'backgroundColor', 'backgroundColor2', 'backgroundBlur', 'restoreModel', 'restoreStrength', 'restoreFidelity', 'colorizeStrength', 'cleanupMode', 'stickerOutline', 'stickerColor', 'stickerShadow', 'idPhotoSize', 'idPhotoBackground', 'faceBlurStyle', 'faceBlurStrength', 'filterStyle', 'filterStrength', 'transformPreset', 'transformVariation', 'segmentPrompt', 'segmentThreshold', 'segmentOutput', 'processingMode', 'openResultsInNewTab', 'customWorkflows', 'customWorkflowValues'], resolve);
@@ -738,7 +797,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const selectedSourceId = result.selectedSourceId;
       const storedIsProcessing = result.isProcessing || false;
       const autoProcess = result.autoProcess || false;
-      const autoRemember = result.autoRemember || false;
+      const autoRemember = result.autoRemember !== false; // Swap Cache is on unless it has been turned off
       
       // Load saved settings
       // Removed workflows map to their replacement (same table as content.js)
@@ -777,40 +836,40 @@ document.addEventListener('DOMContentLoaded', function() {
           slider.nextElementSibling.textContent = value + '%';
         }
       }
+      // What a site rule chose for the tab (see tabFollowsPopup): shown as the choice, since it's what runs there,
+      // unless something picked here already told the tab otherwise, and only while it's a workflow listed here
+      const response = await tabStatus;
+      const ruled = String(response?.workflow || '');
+      if (ruled && !tabFollowsPopup && [...workflowSelect.options].some(option => option.value === ruled)) {
+        workflowSelect.value = ruled;
+      }
       showWorkflowSettings();
+      showSiteNotice();
       openInNewTabToggle.checked = result.openResultsInNewTab === true;
-      
-      // Check actual processing status from content script
-      chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-        sendToTab(tabs[0].id, { action: 'checkProcessingStatus' }, function(response) {
-          const isProcessing = response ? response.isProcessing : storedIsProcessing;
-          // Manual Selection is on or off per tab: ask the tab (a tab without the content script isn't selecting)
-          selectingImage = Boolean(response?.isSelecting);
-          startButton.textContent = selectingImage ? 'Stop Selection' : 'Manual Selection';
-          
-          if (isProcessing) {
-            selectAllButton.textContent = 'Stop Processing';
-            selectAllButton.disabled = false;
-            selectAllButton.classList.add('processing');
-            startButton.disabled = true;
-            showStatus('Continuous processing is active', 'processing');
-          }
-        });
-      });
       
       // Update auto-process toggle state
       autoProcessToggle.checked = autoProcess;
-      autoRememberToggle.checked = autoRemember !== false; // on unless it has been turned off
+      autoRememberToggle.checked = autoRemember;
 
       // Update UI based on processing state
       if (storedIsProcessing) {
         startButton.classList.add('active');
         selectAllButton.disabled = true;
-        statusDiv.textContent = 'Processing';
       } else {
         startButton.classList.remove('active');
         selectAllButton.disabled = false;
-        statusDiv.textContent = 'Not Processing';
+      }
+      // The tab's own state (a tab without the content script isn't selecting, and runs nothing)
+      const isProcessing = response ? response.isProcessing : storedIsProcessing;
+      // Manual Selection is on or off per tab
+      selectingImage = Boolean(response?.isSelecting);
+      startButton.textContent = selectingImage ? 'Stop Selection' : 'Manual Selection';
+      if (isProcessing) {
+        selectAllButton.textContent = 'Stop Processing';
+        selectAllButton.disabled = false;
+        selectAllButton.classList.add('processing');
+        startButton.disabled = true;
+        showStatus('Continuous processing is active', 'processing');
       }
       settingsApplied();
 
@@ -932,7 +991,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   // What the site rules (shared/sites.js) mean for the page in front of us: off altogether, left out of what starts
-  // by itself, or using a workflow of its own instead of the one chosen here. The rules are on the settings page.
+  // by itself, or opened with a workflow of its own, shown as the choice here. The rules are on the settings page.
   function showSiteNotice() {
     const notice = document.getElementById('siteNotice');
     chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
@@ -950,13 +1009,15 @@ document.addEventListener('DOMContentLoaded', function() {
           if (img2imgSites.patterns(stored.automaticSites).length > 0 && !img2imgSites.matches(stored.automaticSites, url)) {
             said.push(`Auto-process and Swap Cache don't start by themselves on ${site} (Automatic Only On).`);
           }
+          const workflowName = workflow => {
+            const customId = customWorkflowId(workflow);
+            return customId ? (stored.customWorkflows || []).find(definition => definition.id === customId)?.name : WORKFLOW_LABELS[workflow];
+          };
+          // A rule for one of the user's own workflows, deleted since: the popup's choice runs here, and the rule
+          // has to be changed in the settings
           const siteWorkflow = img2imgSites.workflowFor(stored.siteWorkflows, url);
-          if (siteWorkflow) {
-            const customId = customWorkflowId(siteWorkflow);
-            const name = customId
-              ? (stored.customWorkflows || []).find(definition => definition.id === customId)?.name
-              : WORKFLOW_LABELS[siteWorkflow];
-            said.push(`On ${site}: ${name || siteWorkflow}, by a rule for this site.`);
+          if (customWorkflowId(siteWorkflow) && !workflowName(siteWorkflow)) {
+            said.push(`A rule for ${site} names a workflow that was deleted, so the one chosen here runs: change the rule in the settings.`);
           }
         }
         notice.textContent = said.join(' ');
@@ -964,9 +1025,6 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   }
-  showSiteNotice();
-
-  const DEFAULT_ASK_OVER = 20;
 
   // "Ask Before" (autoAskOver): Automatic Selection converts every image on the page that qualifies, which on the
   // img2img server costs credits an image, so over that many it says how many and what they cost first. Resolves
@@ -974,7 +1032,7 @@ document.addEventListener('DOMContentLoaded', function() {
   async function automaticSelectionAgreed(tabId) {
     const { autoAskOver } = await chrome.storage.local.get('autoAskOver');
     // Unset means the default (the settings page shows the same one); 0 is "never ask", chosen there
-    const askOver = autoAskOver === undefined ? DEFAULT_ASK_OVER : Math.round(Number(autoAskOver)) || 0;
+    const askOver = askOverLimit(autoAskOver);
     if (askOver <= 0) {
       return true;
     }
@@ -984,11 +1042,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (count <= askOver) {
       return true;
     }
-    const credits = serverCredits[workflowSelect.value];
-    const total = Number.isFinite(credits) ? count * credits : null;
-    const cost = processingMode.value === 'server' && total !== null
-      ? ` That costs about ${total} credit${total === 1 ? '' : 's'}.`
-      : '';
+    const cost = runCostText(count, serverCredits[workflowSelect.value], processingMode.value === 'server');
     return confirm(`About ${count} images on this page will be converted.${cost}\n\nGo ahead?`);
   }
 
@@ -1081,13 +1135,12 @@ document.addEventListener('DOMContentLoaded', function() {
   let serverCredits = {}; // workflow → credits per image, shown in the workflow dropdown
   const serverWorkflowsReady = refreshServerWorkflows();
   async function refreshServerWorkflows() {
-    const response = await chrome.runtime.sendMessage({ action: 'apiRequest', url: '/v1/workflows', method: 'GET' }).catch(() => null);
-    const answered = response?.success && response.status === 200 && Array.isArray(response.data?.workflows);
-    serverWorkflows = answered ? response.data.workflows : [];
-    serverCredits = answered ? (response.data.credits || {}) : {};
-    serverPreprocessors = answered ? (response.data.preprocessors || {}) : null;
-    serverUpscaleModels = answered ? (response.data.upscaleModels || []) : null;
-    serverTypicalWaits = answered ? (response.data.typicalWaitMs || {}) : {};
+    const server = await fetchServerWorkflows(); // (shared/workflows.js)
+    serverWorkflows = server.workflows;
+    serverCredits = server.credits;
+    serverPreprocessors = server.preprocessors;
+    serverUpscaleModels = server.upscaleModels;
+    serverTypicalWaits = server.typicalWaits;
     controlnetListReady = null;
     upscaleModelsReady = null;
     showWorkflowSettings();
@@ -1109,11 +1162,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     accountLoading = true;
     showCreditBadge();
-    const response = await chrome.runtime.sendMessage({ action: 'apiRequest', url: '/v1/me', method: 'GET' }).catch(() => null);
+    const account = await fetchAccount(); // (shared/workflows.js)
     accountLoading = false;
-    accountCredits = response?.success && response.status === 200 ? response.data.credits : null;
-    creditsUrl = accountCredits !== null ? response.data.creditsUrl || null : null;
-    if (!response?.success) {
+    accountCredits = account.credits;
+    creditsUrl = account.creditsUrl;
+    if (!account.reached) {
       status.textContent = "Can't reach the img2img server";
     } else if (accountCredits !== null) {
       status.textContent = `${accountCredits} credit${accountCredits === 1 ? '' : 's'} left`;
@@ -1123,7 +1176,7 @@ document.addEventListener('DOMContentLoaded', function() {
         status.append(' · ', link);
       }
     } else {
-      status.textContent = response.data?.error || `The img2img server returned HTTP ${response.status}`;
+      status.textContent = account.error;
     }
     showCreditBadge();
   }
@@ -1305,6 +1358,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (replacement) {
         workflowSelect.value = replacement.value;
         chrome.storage.local.set({ workflow: replacement.value });
+        popupWorkflowChosen();
         showWorkflowSettings();
         return;
       }
@@ -1461,6 +1515,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const prettyName = name => name.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
   const prettyChoice = value => ({ enable: 'On', disable: 'Off', true: 'On', false: 'Off' })[String(value)] ?? String(value);
 
+  // What the popup calls one of a text setting's own choices
+  const pickName = option => option === PICK_NONE ? 'None' : option;
+
   function formatNumber(value, step) {
     const decimals = (String(step).split('.')[1] || '').length;
     return Number(value).toFixed(decimals);
@@ -1500,7 +1557,8 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // A labelled control for one setting: a slider for numbers (a number box when the range is huge or
-  // unknown), a dropdown for choices, a switch for on/off and a text box for text. onSave gets the new value.
+  // unknown), a dropdown for choices, a switch for on/off and a text box for text; a text setting with words of
+  // its own gets a dropdown of them, or a slider that steps through them. onSave gets the new value.
   // A multiline text box with a sizeKey keeps the height it's resized to (see keepTextareaHeight).
   function createSettingControl(labelText, input, value, onSave, sizeKey = null) {
     const group = document.createElement('div');
@@ -1534,6 +1592,18 @@ document.addEventListener('DOMContentLoaded', function() {
       slider.addEventListener('input', () => { shown.textContent = formatNumber(slider.value, input.step); });
       slider.addEventListener('change', () => onSave(Number(slider.value)));
       group.append(slider, shown);
+    } else if (input.kind === 'pick' && input.slider) {
+      // A slider over the setting's own choices, from None through them in the order they were written (its own
+      // None, where it has one, stays where it was written)
+      const picks = pickList(input);
+      const slider = document.createElement('input');
+      Object.assign(slider, { type: 'range', min: 0, max: picks.length - 1, step: 1, value: Math.max(0, picks.indexOf(value)) });
+      const shown = document.createElement('span');
+      shown.className = 'range-value';
+      shown.textContent = pickName(picks[slider.value]);
+      slider.addEventListener('input', () => { shown.textContent = pickName(picks[slider.value]); });
+      slider.addEventListener('change', () => onSave(picks[slider.value]));
+      group.append(slider, shown);
     } else if (input.kind === 'toggle') {
       const row = document.createElement('label');
       row.className = 'switch';
@@ -1550,14 +1620,19 @@ document.addEventListener('DOMContentLoaded', function() {
       box.className = 'setting-text';
       if (input.multiline) box.rows = 4;
       box.value = value ?? '';
+      // Saved as it's typed: the popup can close before the box loses focus (a click on the page, or the browser's
+      // download bubble taking the focus), and a change event never comes then
+      box.addEventListener('input', () => onSave(box.value));
       box.addEventListener('change', () => onSave(box.value));
       group.append(box);
       if (input.multiline && sizeKey) keepTextareaHeight(box, sizeKey);
     } else {
       const select = document.createElement('select');
-      input.options.forEach((option, index) => select.append(new Option(prettyChoice(option), index)));
-      select.value = Math.max(0, input.options.indexOf(value));
-      select.addEventListener('change', () => onSave(input.options[select.value]));
+      // (a setting's own choices come after None, and are shown as they were written)
+      const options = input.kind === 'pick' ? pickList(input) : input.options;
+      options.forEach((option, index) => select.append(new Option(input.kind === 'pick' ? pickName(option) : prettyChoice(option), index)));
+      select.value = Math.max(0, options.indexOf(value));
+      select.addEventListener('change', () => onSave(options[select.value]));
       group.append(select);
     }
     return group;
@@ -1596,6 +1671,12 @@ document.addEventListener('DOMContentLoaded', function() {
   // The selected workflow's settings, as chosen on the My workflows page, with the values saved here. Its
   // source inputs come first: each takes the source selected in the grid, or one picked for it here.
   let customRender = 0;
+  // (the presets: see showPresets)
+  const presetsButton = document.getElementById('customPresetsOpen');
+  // The workflow whose presets are listed, or null while its Options show; and the preset form's state while its
+  // modal is open, { definition, preset (null for a new one), draft: { key: value }, ticked: Set of keys }
+  let presetsOf = null;
+  let presetForm = null;
   async function renderCustomSettings() {
     const render = ++customRender;
     const id = customWorkflowId(workflowSelect.value);
@@ -1604,47 +1685,270 @@ document.addEventListener('DOMContentLoaded', function() {
     if (render !== customRender) return; // changed while loading
     const container = document.getElementById('customOptions');
     const status = document.getElementById('customStatus');
-    container.replaceChildren();
     const settings = definition?.settings || [];
     status.textContent = !definition ? 'This workflow was deleted: pick another one.'
       : !settings.length && !definition.sourceNodes?.length ? 'No settings chosen for this workflow. Choose some on the My workflows page.' : '';
     status.hidden = !status.textContent;
-    const saved = customWorkflowValues[id] || {};
+    presetsButton.hidden = !definition || !workflowValueKeys(definition).length;
+    // Another workflow's presets were open: this one's Options show
+    if (presetsOf !== null && (presetsOf !== id || presetsButton.hidden)) showCustomView('options');
+    if (!definition) {
+      container.replaceChildren();
+      return;
+    }
     const save = (key, newValue) => {
       customWorkflowValues = { ...customWorkflowValues, [id]: { ...customWorkflowValues[id], [key]: newValue } };
       chrome.storage.local.set({ customWorkflowValues });
     };
+    container.replaceChildren(...customControls(definition, customWorkflowValues[id] || {}, sources, save).map(entry => entry.control));
+  }
+
+  // The keys of every value the popup saves for a custom workflow, in the order of its controls (see customControls)
+  function workflowValueKeys(definition) {
+    const keys = sourceGroups(definition).map(group => `source:${group.key}`);
+    for (const setting of definition?.settings || []) {
+      keys.push(settingKey(setting));
+      if (setting.seed && setting.kind !== 'bypass') keys.push(randomSeedKey(setting));
+    }
+    return keys;
+  }
+
+  // A custom workflow's controls, showing the values given, with save(key, value) called on each change: a picker
+  // for each source, then its settings in their order, a seed's "New seed each time" under it. Each comes as
+  // { key, control, value }, value being what the control shows, as it's saved. The Options and the preset form
+  // both build theirs here.
+  function customControls(definition, saved, sources, save) {
+    const entries = [];
     for (const group of sourceGroups(definition)) {
       const key = `source:${group.key}`;
       const choices = ['', ...sources.map(source => source.id)];
       const names = { '': 'The source selected above', ...Object.fromEntries(sources.map(source => [source.id, source.name])) };
-      const picker = createSettingControl(group.label, { kind: 'choice', options: choices }, choices.includes(saved[key]) ? saved[key] : '', value => save(key, value));
+      const value = choices.includes(saved[key]) ? saved[key] : '';
+      const picker = createSettingControl(group.label, { kind: 'choice', options: choices }, value, newValue => save(key, newValue));
       picker.querySelectorAll('option').forEach(option => { option.textContent = names[choices[option.value]] ?? option.textContent; });
       const uses = group.nodes.length > 1 ? `Uses the source's first ${group.nodes.length} images (its last one again if it has fewer)`
         : group.batch ? "Uses all of the source's images" : "Uses the source's first image";
       picker.title = uses;
       picker.append(Object.assign(document.createElement('div'), { className: 'workflow-hint', textContent: uses }));
-      container.append(picker);
+      entries.push({ key, control: picker, value });
     }
+    // The settings of a node that's switched off are put away with it: they'd change nothing
+    const settings = definition.settings || [];
+    const off = new Set(settings.filter(setting => setting.kind === 'bypass' && nodeSwitchedOff(definition, setting, saved)).map(setting => String(setting.node)));
+    const ofNode = (control, node) => {
+      control.dataset.node = node;
+      control.hidden = off.has(String(node));
+    };
     for (const setting of settings) {
-      const key = `${setting.node}.${setting.input}`;
+      const key = settingKey(setting);
+      if (setting.kind === 'bypass') {
+        // A node's switch: on unless it was turned off here, or is off in the workflow file and wasn't turned on here
+        // (what's saved is whether the node is left out)
+        const value = nodeSwitchedOff(definition, setting, saved);
+        const control = createSettingControl(setting.label, { kind: 'toggle' }, !value, checked => {
+          save(key, !checked);
+          for (const other of entries) {
+            if (other.control.dataset.node === String(setting.node)) other.control.hidden = !checked;
+          }
+        });
+        control.classList.add('node-switch');
+        entries.push({ key, control, value });
+        continue;
+      }
       const value = settingValue(setting, saved[key], definition.graph[setting.node]?.inputs[setting.input]);
-      const control = createSettingControl(setting.label, setting, value, newValue => save(key, newValue), `${id}.${key}`);
-      container.append(control);
+      const control = createSettingControl(setting.label, setting, value, newValue => save(key, newValue), `${definition.id}.${key}`);
+      ofNode(control, setting.node);
+      entries.push({ key, control, value });
       if (setting.seed) {
         // A seed can be a new random number for each image instead (the number box is then unused)
         const randomKey = randomSeedKey(setting);
         const number = control.querySelector('input');
-        number.disabled = saved[randomKey] === true;
-        const random = createSettingControl('New seed each time', { kind: 'toggle' }, saved[randomKey] === true, checked => {
+        const random = saved[randomKey] === true;
+        number.disabled = random;
+        const toggle = createSettingControl('New seed each time', { kind: 'toggle' }, random, checked => {
           number.disabled = checked;
           save(randomKey, checked);
         });
-        random.classList.add('seed-random');
-        container.append(random);
+        toggle.classList.add('seed-random');
+        ofNode(toggle, setting.node);
+        entries.push({ key: randomKey, control: toggle, value: random });
       }
     }
+    return entries;
   }
+
+  // Presets: values for some of a custom workflow's settings, kept in customWorkflowPresets[id] as
+  // [{ id, name, values }], values under the keys customWorkflowValues uses. Applying one puts its values in with the
+  // popup's own; which one was applied isn't shown, as the settings can be changed after it, or by another preset.
+  // The My workflows page carries them over with the values when a workflow's file is replaced.
+
+  // 'options' or 'list' (the presets; adding or editing one opens the preset modal over them)
+  function showCustomView(view) {
+    document.getElementById('customOptionsView').hidden = view !== 'options';
+    document.getElementById('customPresets').hidden = view !== 'list';
+    presetsOf = view === 'options' ? null : customWorkflowId(workflowSelect.value);
+    if (view === 'options') hidePresetModal();
+  }
+
+  function hidePresetModal() {
+    document.getElementById('presetModal').style.display = 'none';
+    presetForm = null;
+    document.getElementById('presetControls').replaceChildren();
+  }
+
+  const shownCustomWorkflow = () => customWorkflows.find(item => item.id === customWorkflowId(workflowSelect.value));
+
+  async function loadPresets(id) {
+    const { customWorkflowPresets = {} } = await chrome.storage.local.get('customWorkflowPresets');
+    return Array.isArray(customWorkflowPresets[id]) ? customWorkflowPresets[id] : [];
+  }
+
+  async function savePresets(id, presets) {
+    const { customWorkflowPresets = {} } = await chrome.storage.local.get('customWorkflowPresets');
+    const all = { ...customWorkflowPresets };
+    if (presets.length) all[id] = presets;
+    else delete all[id];
+    await chrome.storage.local.set({ customWorkflowPresets: all });
+  }
+
+  // A preset's values for the settings the workflow has now (one taken off the workflow keeps its value in the
+  // preset, for when it's put back)
+  function presetValues(definition, preset) {
+    const keys = new Set(workflowValueKeys(definition));
+    return Object.fromEntries(Object.entries(preset?.values || {}).filter(([key]) => keys.has(key)));
+  }
+
+  async function showPresets() {
+    const definition = shownCustomWorkflow();
+    if (!definition) {
+      showCustomView('options');
+      return;
+    }
+    const presets = await loadPresets(definition.id);
+    if (shownCustomWorkflow() !== definition) return; // changed while loading
+    document.getElementById('presetList').replaceChildren(...presets.map(preset => {
+      const row = document.createElement('div');
+      row.className = 'preset-row';
+      const info = document.createElement('div');
+      info.className = 'preset-info';
+      const count = Object.keys(presetValues(definition, preset)).length;
+      info.append(
+        Object.assign(document.createElement('div'), { className: 'preset-name', textContent: preset.name, title: preset.name }),
+        Object.assign(document.createElement('div'), {
+          className: 'workflow-hint',
+          textContent: count ? `Changes ${count} option${count === 1 ? '' : 's'}` : 'Changes nothing this workflow has now',
+        }),
+      );
+      const action = (text, onClick, title = '') => {
+        const button = Object.assign(document.createElement('button'), { className: 'link-button', textContent: text, title });
+        button.addEventListener('click', onClick);
+        return button;
+      };
+      row.append(
+        info,
+        action('Apply', () => applyPreset(definition, preset), 'Put these values in the Options'),
+        action('Edit', () => openPresetForm(definition, preset)),
+        action('Delete', async () => {
+          if (!confirm(`Delete the preset "${preset.name}"?`)) return;
+          await savePresets(definition.id, (await loadPresets(definition.id)).filter(item => item.id !== preset.id));
+          showPresets();
+        }),
+      );
+      return row;
+    }));
+    document.getElementById('presetsEmpty').hidden = presets.length > 0;
+    showCustomView('list');
+  }
+
+  async function applyPreset(definition, preset) {
+    const values = presetValues(definition, preset);
+    customWorkflowValues = { ...customWorkflowValues, [definition.id]: { ...customWorkflowValues[definition.id], ...values } };
+    await chrome.storage.local.set({ customWorkflowValues });
+    showCustomView('options');
+    renderCustomSettings();
+  }
+
+  // The form for a new preset (starting from the values in the Options, nothing ticked) or one to edit (its own
+  // values over those, its settings ticked). Each setting has a tick that puts it in the preset; changing it ticks it.
+  async function openPresetForm(definition, preset = null) {
+    const sources = definition.sourceNodes?.length ? await getAllSources().catch(() => []) : [];
+    const own = presetValues(definition, preset);
+    const draft = {};
+    const ticked = new Set(Object.keys(own));
+    const rows = new Map();
+    const tick = (key, on) => {
+      const row = rows.get(key);
+      row.box.checked = on;
+      row.control.classList.toggle('preset-off', !on);
+      if (on) ticked.add(key);
+      else ticked.delete(key);
+    };
+    const entries = customControls(definition, { ...customWorkflowValues[definition.id], ...own }, sources, (key, value) => {
+      draft[key] = value;
+      tick(key, true);
+    });
+    for (const { key, control, value } of entries) {
+      draft[key] = value;
+      const box = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'preset-tick', title: 'Part of this preset' });
+      box.addEventListener('change', () => tick(key, box.checked));
+      // (inside the label: a click on the setting's name ticks it too)
+      control.querySelector('.settings-label').prepend(box);
+      rows.set(key, { box, control });
+      tick(key, ticked.has(key));
+    }
+    document.getElementById('presetControls').replaceChildren(...entries.map(entry => entry.control));
+    document.getElementById('presetTitle').textContent = preset ? 'Edit Preset' : 'New Preset';
+    document.getElementById('presetName').value = preset?.name || '';
+    document.getElementById('presetError').hidden = true;
+    document.getElementById('presetModal').style.display = 'block';
+    document.getElementById('presetModal').scrollTop = 0;
+    presetForm = { definition, preset, draft, ticked };
+    document.getElementById('presetName').focus();
+  }
+
+  async function savePresetForm() {
+    if (!presetForm) return;
+    const { definition, preset, draft, ticked } = presetForm;
+    const name = document.getElementById('presetName').value.trim();
+    const error = document.getElementById('presetError');
+    error.textContent = !name ? 'Give the preset a name.' : !ticked.size ? 'Tick at least one option for the preset to change.' : '';
+    error.hidden = !error.textContent;
+    if (error.textContent) return;
+    // (in the order the settings show; values kept for settings the workflow doesn't have now stay)
+    const keys = workflowValueKeys(definition);
+    const kept = Object.fromEntries(Object.entries(preset?.values || {}).filter(([key]) => !keys.includes(key)));
+    const values = { ...kept, ...Object.fromEntries(keys.filter(key => ticked.has(key)).map(key => [key, draft[key]])) };
+    const presets = await loadPresets(definition.id);
+    const edited = preset && presets.some(item => item.id === preset.id);
+    await savePresets(definition.id, edited
+      ? presets.map(item => item.id === preset.id ? { ...item, name, values } : item)
+      : [...presets, { id: `p_${Date.now().toString(36)}`, name, values }]);
+    hidePresetModal();
+    showPresets();
+  }
+
+  presetsButton.addEventListener('click', event => {
+    // (the heading's own click folds the section away: this opens it instead, where it was folded)
+    event.stopPropagation();
+    const stage = document.getElementById('customSettings');
+    if (stage.classList.contains('collapsed')) stage.querySelector('.settings-stage').click();
+    showPresets();
+  });
+  document.getElementById('presetsBack').addEventListener('click', () => showCustomView('options'));
+  document.getElementById('presetAdd').addEventListener('click', () => {
+    const definition = shownCustomWorkflow();
+    if (definition) openPresetForm(definition);
+  });
+  document.getElementById('presetCancel').addEventListener('click', hidePresetModal);
+  document.getElementById('presetClose').addEventListener('click', hidePresetModal);
+  document.getElementById('presetSave').addEventListener('click', () => savePresetForm());
+  document.getElementById('presetName').addEventListener('keydown', event => {
+    if (event.key === 'Enter') savePresetForm();
+  });
+  // Presets carried over by the My workflows page (a replaced file) while they're listed here
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.customWorkflowPresets && !document.getElementById('customPresets').hidden) showPresets();
+  });
 
   document.getElementById('manageWorkflows').addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('workflows.html') });
@@ -1654,11 +1958,51 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.tabs.create({ url: chrome.runtime.getURL('cache.html') });
   });
 
+  // The Library: the tab it is already open in, if there is one, so the folder open there isn't lost to a second tab
+  document.getElementById('openLibrary').addEventListener('click', async () => {
+    const url = chrome.runtime.getURL('library.html');
+    const tabs = await chrome.tabs.query({}).catch(() => []);
+    const open = tabs.find(tab => tab.url?.startsWith(url));
+    if (!open) {
+      chrome.tabs.create({ url });
+      return;
+    }
+    await chrome.tabs.update(open.id, { active: true });
+    await chrome.windows.update(open.windowId, { focused: true }).catch(() => {});
+  });
+
+  // The images waiting their turn, across every tab (background.js keeps the queue and says when it changes). Clear
+  // Queue takes them all out; the ones already being processed finish.
+  const queueRow = document.getElementById('queueRow');
+  const queueCount = document.getElementById('queueCount');
+  function showQueue(waiting) {
+    queueRow.hidden = !waiting;
+    queueCount.textContent = `${waiting} image${waiting === 1 ? '' : 's'} waiting`;
+  }
+  chrome.runtime.sendMessage({ action: 'queueStatus' }).then(response => showQueue(response?.waiting || 0), () => {});
+  chrome.runtime.onMessage.addListener(request => {
+    if (request.action === 'queueChanged') showQueue(request.waiting);
+  });
+  document.getElementById('clearQueue').addEventListener('click', async () => {
+    const { cleared } = await chrome.runtime.sendMessage({ action: 'clearQueue' });
+    showQueue(0);
+    // Automatic Selection stops with it (the page would pick the same images again)
+    if (selectAllButton.classList.contains('processing')) {
+      selectAllButton.textContent = 'Automatic Selection';
+      selectAllButton.classList.remove('processing');
+      startButton.disabled = false;
+      chrome.storage.local.set({ isProcessing: false });
+    }
+    showStatus(`${cleared} image${cleared === 1 ? '' : 's'} taken out of the queue`, 'success');
+  });
+
   // Workflows added, changed or deleted on the My workflows page while the popup is open
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  chrome.storage.onChanged.addListener(async (changes, areaName) => {
     if (areaName !== 'local' || !changes.customWorkflows) return;
     const selected = workflowSelect.value;
     customWorkflows = changes.customWorkflows.newValue || [];
+    // The My workflows page moves a workflow's saved values along when its file is replaced
+    customWorkflowValues = (await chrome.storage.local.get('customWorkflowValues')).customWorkflowValues || {};
     renderCustomWorkflowOptions();
     workflowSelect.value = selected;
     if (!workflowSelect.value) {
@@ -1667,11 +2011,19 @@ document.addEventListener('DOMContentLoaded', function() {
       chrome.storage.local.set({ workflow: workflowSelect.value });
     }
     showWorkflowSettings();
+    // (a preset's count of settings is the workflow's)
+    if (!document.getElementById('customPresets').hidden) showPresets();
   });
 
   controlnetPreprocessor.addEventListener('change', () => {
     chrome.storage.local.set({ controlnetPreprocessor: controlnetPreprocessor.value });
     renderControlnetOptions();
+  });
+  // The prompt is saved as it's typed too (as it's sent; the box is tidied once it's left): the popup can close before
+  // the box loses focus, and a change event never comes then
+  const segmentPromptInput = document.getElementById('segmentPrompt');
+  segmentPromptInput.addEventListener('input', () => {
+    chrome.storage.local.set({ segmentPrompt: segmentPrompt(segmentPromptInput.value) || SEGMENT_DEFAULTS.prompt });
   });
   for (const input of simpleInputs) {
     input.addEventListener('change', () => {
@@ -1694,6 +2046,8 @@ document.addEventListener('DOMContentLoaded', function() {
   // Handle workflow change
   workflowSelect.addEventListener('change', function() {
     chrome.storage.local.set({ workflow: this.value });
+    popupWorkflowChosen();
+    showCustomView('options');
     showWorkflowSettings();
   });
 

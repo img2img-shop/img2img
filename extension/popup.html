@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>img2img</title>
   <script src="shared/theme.js"></script>
   <style>
@@ -11,7 +12,20 @@
     body {
       width: 300px;
       padding: 12px;
+      /* The space under the buttons is the bar's own (.actions-bar), so it is the same wherever the popup is
+         scrolled to: a margin here only came into view at the very end, and the bar jumped up by it */
+      margin-bottom: 0;
       font-family: Arial, sans-serif;
+    }
+    /* Inside the Library page (library.html shows popup.html?embedded as its workflow panel): it fills the pane it is
+       given, without the logo that page already shows, and without the selection buttons and what goes with them,
+       since the Library selects its files in its own list */
+    :root.embedded body {
+      width: auto;
+    }
+    :root.embedded .popup-header img,
+    :root.embedded .section.actions-bar {
+      display: none;
     }
     .section {
       margin-bottom: 20px;
@@ -19,6 +33,18 @@
     /* The last one ends at the body's padding, like the sides */
     .section:last-of-type {
       margin-bottom: 0;
+    }
+    /* The selection buttons stay at the bottom of the popup while everything above scrolls under them, so they
+       are in reach however much is open. Runs out to the popup's edges, like the accordion bars. Lists that
+       drop down (z-index 20) still open over it */
+    .section.actions-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 10;
+      margin: 0 -12px -12px;
+      padding: 10px 12px 20px;
+      border-top: 1px solid #e4e4e4;
+      background: #fff;
     }
     .popup-header {
       display: flex;
@@ -633,6 +659,26 @@
     .link-button:hover {
       text-decoration: underline;
     }
+    /* (next to "View cached images", on one line) */
+    #openLibrary {
+      margin-right: 14px;
+    }
+    /* How many images are waiting their turn, across every tab, with a way to clear them */
+    .queue-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #666;
+    }
+    .queue-row .link-button {
+      margin-top: 0;
+    }
+    :root[data-theme="dark"] .queue-row {
+      color: #aaa;
+    }
     /* "New seed each time" sits right under its seed */
     .seed-random {
       margin-top: -8px;
@@ -664,6 +710,68 @@
     }
     .stage-hint {
       margin: -6px 0 15px;
+    }
+    /* A link in a section's heading (a custom workflow's Presets), before the fold arrow */
+    .settings-stage .stage-link {
+      margin: 0 10px 0 auto;
+      font-size: 12px;
+      font-weight: normal;
+      letter-spacing: normal;
+      text-transform: none;
+    }
+    .settings-stage:has(.stage-link:not([hidden]))::after {
+      margin-left: 0;
+    }
+    /* A custom workflow's presets: one row each, its name and what it changes, with its actions */
+    .preset-back {
+      margin: 0 0 8px;
+    }
+    .preset-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .preset-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .preset-name {
+      overflow: hidden;
+      font-size: 13px;
+      color: #333;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .preset-info .workflow-hint {
+      margin-top: 2px;
+    }
+    .preset-row .link-button {
+      margin-top: 0;
+    }
+    #presetsEmpty {
+      margin: 0 0 4px;
+    }
+    .preset-form-hint {
+      margin: -6px 0 12px;
+    }
+    /* The tick that puts a setting in the preset; an unticked setting's control is faded */
+    .preset-tick {
+      margin: 0 6px 0 0;
+      vertical-align: -2px;
+      cursor: pointer;
+    }
+    #presetControls .settings-label {
+      cursor: pointer;
+    }
+    #presetControls .preset-off > :not(.settings-label) {
+      opacity: 0.45;
+    }
+    .preset-error {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: #c62828;
     }
     .source-actions {
       margin: 10px 0 0;
@@ -964,6 +1072,10 @@
       background: #1b1b1c;
       color: #e3e3e3;
     }
+    :root[data-theme="dark"] .section.actions-bar {
+      border-top-color: #333;
+      background: #1b1b1c;
+    }
     :root[data-theme="dark"] .section-title,
     :root[data-theme="dark"] .settings-subheading,
     :root[data-theme="dark"] .modal h3,
@@ -1069,6 +1181,15 @@
       background-color: #2e2e31;
       color: #e3e3e3;
     }
+    :root[data-theme="dark"] .preset-row {
+      border-color: #333336;
+    }
+    :root[data-theme="dark"] .preset-name {
+      color: #e3e3e3;
+    }
+    :root[data-theme="dark"] .preset-error {
+      color: #ef9a9a;
+    }
     :root[data-theme="dark"] .source-actions button:hover {
       background-color: #3a3a3e;
     }
@@ -1156,6 +1277,25 @@
     </div>
   </div>
 
+  <!-- Adding or editing one of a custom workflow's presets (popup.js fills it) -->
+  <div id="presetModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" id="presetClose">&times;</span>
+      <h3 id="presetTitle">New Preset</h3>
+      <div class="settings-group">
+        <label class="settings-label" for="presetName">Preset name</label>
+        <input type="text" id="presetName" class="setting-text" maxlength="60" spellcheck="false">
+      </div>
+      <div class="workflow-hint preset-form-hint">Tick the options this preset changes; changing an option ticks it. The ones left unticked keep whatever they're set to.</div>
+      <div id="presetControls"></div>
+      <div id="presetError" class="preset-error" hidden></div>
+      <div class="modal-actions">
+        <button class="cancel-source" id="presetCancel">Cancel</button>
+        <button class="save-source" id="presetSave">Save Preset</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Full-size viewer for a source's images -->
   <div id="imageViewer" class="image-viewer" hidden>
     <img id="viewerImage" alt="Source image">
@@ -1170,7 +1310,7 @@
     <span id="creditBadge" class="credit-badge" hidden></span>
   </header>
 
-  <!-- Anything img2img.shop has to say, checked once a day by background.js and drawn by popup.js -->
+  <!-- Anything img2img.shop has to say, checked by background.js (once a day, and as the popup opens) and drawn by popup.js -->
   <div id="announcements" hidden></div>
 
   <!-- Firefox lets users withhold or revoke the site access granted at install (popup.js) -->
@@ -1475,10 +1615,19 @@
 
       <!-- One of the user's own workflows: the settings chosen for it on the My workflows page (popup.js builds them) -->
       <div id="customSettings" class="stage" data-stage="custom" hidden>
-        <div class="settings-stage">Settings</div>
+        <div class="settings-stage">Options<button id="customPresetsOpen" class="link-button stage-link" title="Sets of values for this workflow's options, each put in with one click" hidden>Presets</button></div>
         <div class="stage-body">
-          <div id="customOptions"></div>
-          <div id="customStatus" class="workflow-hint stage-hint" hidden></div>
+          <div id="customOptionsView">
+            <div id="customOptions"></div>
+            <div id="customStatus" class="workflow-hint stage-hint" hidden></div>
+          </div>
+          <!-- The workflow's presets (popup.js lists them; #presetModal adds or edits one) -->
+          <div id="customPresets" hidden>
+            <button id="presetsBack" class="link-button preset-back">&lsaquo; Back to options</button>
+            <div id="presetList"></div>
+            <div id="presetsEmpty" class="workflow-hint">No presets yet. A preset keeps values for some of this workflow's options, to put them in with one click.</div>
+            <button id="presetAdd" class="link-button">+ Add preset</button>
+          </div>
         </div>
       </div>
 
@@ -1543,12 +1692,17 @@
     </div>
   </div>
 
-  <div class="section">
+  <div class="section actions-bar">
     <div id="siteNotice" class="workflow-hint" hidden></div>
     <div class="button-group">
       <button id="startSelection" title="Click an image on the page to process it. Double-click it to open its link or press it, as if Manual Selection were off.">Manual Selection</button>
       <button id="selectAllVisible">Automatic Selection</button>
     </div>
+    <div id="queueRow" class="queue-row" hidden>
+      <span id="queueCount"></span>
+      <button id="clearQueue" class="link-button" title="Takes every image still waiting out of the queue, in every tab, and stops Automatic Selection. The images already being processed finish.">Clear queue</button>
+    </div>
+    <button id="openLibrary" class="link-button" title="Open a folder of your own images and videos, and process them there">Library&hellip;</button>
     <button id="viewCache" class="link-button" title="A slideshow of the images processed before (the cache keeps as many as the Cache Size setting)">View cached images&hellip;</button>
     <div class="status-section">
       <div class="status" id="status"></div>

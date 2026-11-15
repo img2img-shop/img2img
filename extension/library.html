@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Library - img2img</title>
+  <script src="shared/theme.js"></script>
+  <link rel="stylesheet" href="shared/pages.css">
+  <style>
+    :root {
+      --left-w: 300px;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px Arial, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+    button, select, input {
+      font: inherit;
+      color: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    ::-webkit-scrollbar {
+      width: 9px;
+      height: 9px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--scroll);
+      border-radius: 5px;
+    }
+
+    .btn {
+      padding: 5px 10px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: transparent;
+      white-space: nowrap;
+    }
+    .btn:hover:not(:disabled) {
+      background: var(--hover);
+    }
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    .btn.primary {
+      border-color: var(--green);
+      background: var(--green);
+      color: #fff;
+      font-weight: bold;
+    }
+    .btn.primary:hover:not(:disabled) {
+      background: #12893e;
+    }
+    .btn.danger {
+      border-color: var(--red);
+      background: var(--red);
+      color: #fff;
+    }
+    .btn.danger:hover:not(:disabled) {
+      background: #b71c1c;
+    }
+    .btn[aria-pressed="true"],
+    .btn[aria-pressed="true"]:hover:not(:disabled) {
+      border-color: var(--green);
+      background: var(--green);
+      color: #fff;
+    }
+    .icon {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .seg {
+      display: inline-flex;
+    }
+    .seg .btn {
+      margin-left: -1px;
+      border-radius: 0;
+    }
+    .seg .btn:first-child {
+      margin-left: 0;
+      border-radius: 6px 0 0 6px;
+    }
+    .seg .btn:last-child {
+      border-radius: 0 6px 6px 0;
+    }
+    select, input[type="search"] {
+      padding: 5px 6px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: var(--panel);
+    }
+
+    /* The bar across the top: the logo and the page's name, what opens a folder, and where in it the list is */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    #logo {
+      line-height: 0;
+    }
+    #logo img {
+      height: 30px;
+    }
+    #logo .logo-dark,
+    :root[data-theme="dark"] #logo .logo-light {
+      display: none;
+    }
+    :root[data-theme="dark"] #logo .logo-dark {
+      display: block;
+    }
+    #pageTitle {
+      margin: 0 8px 0 0;
+      padding-left: 10px;
+      border-left: 1px solid var(--control-border);
+      font-size: 17px;
+      font-weight: normal;
+      color: var(--strong);
+    }
+    #crumbs {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      white-space: nowrap;
+    }
+    #crumbs button {
+      padding: 2px 5px;
+      border: none;
+      border-radius: 4px;
+      background: none;
+    }
+    #crumbs button:hover {
+      background: var(--hover);
+    }
+    #crumbs .sep {
+      color: var(--muted);
+    }
+    .theme-toggle {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: transparent;
+    }
+    .theme-toggle:hover {
+      background: var(--hover);
+    }
+
+    /* The three panes: folders and files, the viewer, and the workflow with what is known about the file open */
+    #panes {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+    }
+    #left {
+      width: var(--left-w);
+      min-width: 180px;
+      max-width: 60vw;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+    }
+    #right {
+      width: 324px;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+    }
+    #centre {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .splitter {
+      width: 5px;
+      flex: none;
+      background: var(--border);
+      cursor: col-resize;
+    }
+    .splitter:hover,
+    .splitter.drag {
+      background: var(--sel-border);
+    }
+    .edge {
+      width: 1px;
+      flex: none;
+      background: var(--border);
+    }
+    body.no-left #left,
+    body.no-left #splitL,
+    body.no-right #right,
+    body.no-right #edgeR {
+      display: none;
+    }
+    .pane-h {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #tree {
+      flex: none;
+      max-height: 32%;
+      overflow-y: auto;
+      padding: 0 6px 4px;
+    }
+    #tree button {
+      display: block;
+      width: 100%;
+      padding: 4px 6px;
+      overflow: hidden;
+      border: none;
+      border-radius: 5px;
+      background: none;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #tree button:hover {
+      background: var(--hover);
+    }
+    #tree button.on {
+      background: var(--sel);
+      color: var(--strong);
+    }
+    #tree .count {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    #subRow {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+    /* The files and their controls are one panel, which sits in the left pane beside the viewer, or takes the
+       viewer's place as a grid across the middle (library.js moves it) */
+    #filesHost,
+    #gridHost,
+    #filesPanel {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #filesBar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    #search {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+    #gridHost #search {
+      flex: 0 1 220px;
+    }
+    #size {
+      width: 80px;
+    }
+
+    /* The files, in the view chosen */
+    #files {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      --tile: 84px;
+    }
+    #files.thumbs {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+      gap: 8px;
+      align-content: start;
+    }
+    .item {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      cursor: default;
+    }
+    .item:hover {
+      background: var(--hover);
+    }
+    .item.sel {
+      border-color: var(--sel-border);
+      background: var(--sel);
+    }
+    .item.cur {
+      outline: 2px solid var(--green);
+      outline-offset: -1px;
+    }
+    .tile {
+      padding: 4px;
+    }
+    .pic {
+      position: relative;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--thumb);
+    }
+    .pic img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    .pic img:not([src]) {
+      visibility: hidden;
+    }
+    .nm {
+      margin-top: 3px;
+      overflow: hidden;
+      font-size: 11px;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 6px;
+    }
+    .row .pic {
+      width: 30px;
+      flex: none;
+    }
+    .row .nm {
+      flex: 1;
+      margin: 0;
+      font-size: 13px;
+      text-align: left;
+    }
+    #files.details {
+      padding: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--strip);
+      color: var(--muted);
+      font-weight: normal;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    th:hover {
+      color: var(--strong);
+    }
+    td {
+      max-width: 260px;
+      padding: 3px 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    td .pic {
+      display: inline-block;
+      width: 26px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    tr.item {
+      border: none;
+    }
+    tr.item.cur {
+      outline-offset: -2px;
+    }
+    .empty {
+      grid-column: 1 / -1;
+      padding: 30px 10px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* Where a file is on its way through, on its picture: waiting (with how many are ahead), being processed, failed */
+    .badge {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      padding: 1px 6px;
+      border-radius: 9px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 10px;
+      font-weight: bold;
+      line-height: 15px;
+      white-space: nowrap;
+    }
+    .badge.done {
+      background: var(--green);
+    }
+    .badge.failed {
+      background: var(--red);
+    }
+    .badge.blocked {
+      background: #777;
+    }
+    .badge.queued {
+      background: #e08600;
+      cursor: pointer;
+    }
+    .badge.vid {
+      top: auto;
+      right: auto;
+      bottom: 3px;
+      left: 3px;
+    }
+    .row .badge,
+    td .badge {
+      position: static;
+      display: inline-block;
+    }
+    .row .pic .badge,
+    td .pic .badge,
+    .row .pic .mark,
+    td .pic .mark {
+      display: none;
+    }
+    /* Processed: a white tick in a green circle on the thumbnail (the list and the details view say the word) */
+    .mark {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.5);
+    }
+    .mark svg {
+      width: 13px;
+      height: 13px;
+    }
+    #strip .mark {
+      top: 3px;
+      right: 3px;
+      width: 15px;
+      height: 15px;
+    }
+    #strip .mark svg {
+      width: 10px;
+      height: 10px;
+    }
+    /* Being processed: the animated logo mark, as on a page's image */
+    .spinmark {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 24px;
+      height: 24px;
+      padding: 2px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    }
+    .pic .spinmark img {
+      width: 100%;
+      height: 100%;
+    }
+    #strip .spinmark {
+      width: 18px;
+      height: 18px;
+    }
+    .row .pic .spinmark,
+    td .pic .spinmark {
+      display: none;
+    }
+    .words .spinmark {
+      position: static;
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .words .spinmark img {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .item.blocked .pic img {
+      filter: grayscale(1) opacity(0.45);
+    }
+
+    /* The viewer */
+    #viewerWrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #viewerBar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    .grow {
+      flex: 1;
+    }
+    #vName {
+      max-width: 220px;
+      overflow: hidden;
+      color: var(--strong);
+      font-weight: bold;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #vCount,
+    #zoomPct {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #zoomPct {
+      width: 40px;
+    }
+    #zoom {
+      width: 90px;
+    }
+    #viewer {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--bg);
+      cursor: grab;
+    }
+    #viewer.panning {
+      cursor: grabbing;
+    }
+    #viewer:fullscreen {
+      background: #000;
+    }
+    /* The picture, moved and scaled as a whole. The squares behind it show where a result is see-through */
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      background: repeating-conic-gradient(var(--checker-a) 0% 25%, var(--checker-b) 0% 50%) 50% / 24px 24px;
+      box-shadow: 0 2px 14px rgba(0, 0, 0, 0.3);
+    }
+    #canvas img,
+    #canvas video {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    /* (the comparison laid over the result checks that its picture is what is under it, so this one can be found) */
+    #canvas #vRes {
+      pointer-events: auto;
+    }
+    #vMsg {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      text-align: center;
+    }
+    #drop {
+      max-width: 520px;
+      padding: 40px 60px;
+      border: 2px dashed var(--control-border);
+      border-radius: 14px;
+    }
+    #drop b {
+      color: var(--strong);
+      font-size: 18px;
+    }
+    #drop p {
+      margin: 0 0 14px;
+    }
+    #drop p.small {
+      margin: 16px 0 0;
+      font-size: 13px;
+    }
+    #recentList {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    #recentList div {
+      display: flex;
+      gap: 4px;
+    }
+    #recentList .btn {
+      max-width: 320px;
+      overflow: hidden;
+      font-size: 13px;
+      text-overflow: ellipsis;
+    }
+    #recentList .forget {
+      border-color: transparent;
+      color: var(--muted);
+    }
+    body.dragover #drop {
+      border-color: var(--green);
+      background: var(--sel);
+    }
+    /* A video's own bar, under the picture: the timeline carries a mark for every frame that was processed */
+    #vidBar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+    }
+    #scrubWrap {
+      flex: 1;
+      min-width: 80px;
+    }
+    #scrub {
+      display: block;
+      width: 100%;
+      margin: 0;
+    }
+    #marks {
+      position: relative;
+      height: 10px;
+      margin: 0 8px;
+    }
+    #marks button {
+      position: absolute;
+      top: 0;
+      width: 10px;
+      height: 10px;
+      margin-left: -5px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    #marks button.wait {
+      background: #e08600;
+    }
+    #marks button.on {
+      outline: 2px solid var(--strong);
+    }
+    #vTime {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    #strip {
+      flex: none;
+      display: flex;
+      gap: 5px;
+      padding: 6px 10px;
+      overflow-x: auto;
+      border-top: 1px solid var(--border);
+      background: var(--strip);
+    }
+    #strip .item {
+      flex: none;
+      width: 62px;
+      padding: 2px;
+    }
+    #strip .badge {
+      padding: 0 4px;
+      font-size: 9px;
+    }
+
+    /* Right: the popup as it is (its workflow and settings), the one button that runs, and the file open */
+    #popup {
+      flex: 1;
+      min-height: 160px;
+      width: 100%;
+      border: none;
+      border-bottom: 1px solid var(--border);
+    }
+    #run {
+      flex: none;
+      display: grid;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    #run .btn {
+      padding: 8px 10px;
+    }
+    #infoPane {
+      flex: none;
+      max-height: 45%;
+      overflow-y: auto;
+    }
+    #info {
+      padding: 0 12px 12px;
+      line-height: 1.7;
+      user-select: text;
+    }
+    #info .k {
+      display: inline-block;
+      width: 78px;
+      color: var(--muted);
+    }
+    #info .error {
+      margin-top: 4px;
+      color: var(--red);
+      line-height: 1.4;
+    }
+    #info .hint {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .ver {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      line-height: 1.3;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ver:hover {
+      background: var(--hover);
+    }
+    .ver.on {
+      border-color: var(--green);
+      background: var(--sel);
+    }
+    .ver .grow {
+      min-width: 0;
+    }
+    .ver small {
+      display: block;
+      overflow: hidden;
+      color: var(--muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ver button {
+      padding: 2px 5px;
+      border: none;
+      background: none;
+      color: var(--muted);
+    }
+    .ver button:hover {
+      color: var(--link);
+    }
+    .ver button.del:hover {
+      color: var(--red);
+    }
+
+    /* The bar along the bottom, and the queue that opens from it */
+    #status {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 6px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+    }
+    #status b {
+      color: var(--strong);
+      font-weight: normal;
+    }
+    #queueBtn {
+      padding: 2px 6px;
+      border: none;
+      border-radius: 5px;
+      background: none;
+      color: var(--link);
+    }
+    #queueBtn:hover {
+      background: var(--hover);
+    }
+    #queue {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 12px;
+      z-index: 20;
+      width: 380px;
+      max-height: 50vh;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+    #queue .hd {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    #queue .hd b {
+      flex: 1;
+    }
+    #queueList {
+      overflow-y: auto;
+      padding: 4px;
+    }
+    #queueList div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px;
+    }
+    #queueList span {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #queueList small {
+      color: var(--muted);
+    }
+    #queueList button {
+      border: none;
+      background: none;
+      color: var(--muted);
+    }
+    #queueList button:hover {
+      color: var(--red);
+    }
+
+    /* The content script's notices go in the bottom-right corner of a page; here that is where the file's results and
+       their buttons are, so they sit in the middle, above the bar along the bottom */
+    #img2img-error-toast {
+      right: auto !important;
+      bottom: 44px !important;
+      left: 50% !important;
+      transform: translateX(-50%);
+    }
+    .menu {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 30;
+      min-width: 210px;
+      padding: 5px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    .menu button {
+      display: block;
+      width: 100%;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 5px;
+      background: none;
+      text-align: left;
+    }
+    .menu button:hover:not(:disabled) {
+      background: var(--hover);
+    }
+    .menu button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    /* A folder opened before, with the button that takes it off the list */
+    .menu .recent-row {
+      display: flex;
+      align-items: center;
+    }
+    .menu .recent-row button:first-child {
+      flex: 1;
+      min-width: 0;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .menu .recent-row .forget {
+      width: auto;
+      padding: 7px 9px;
+      color: var(--muted);
+    }
+    .menu .recent-row .forget:hover {
+      color: var(--red);
+    }
+    #recentBtn {
+      padding: 5px 7px;
+      border-left-color: rgba(255, 255, 255, 0.45);
+    }
+    .menu .note {
+      max-width: 260px;
+      padding: 6px 10px 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .menu hr {
+      margin: 5px 0;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* (dialogs are styled in shared/pages.css; these two hold more to read) */
+    dialog {
+      max-width: 460px;
+    }
+    dialog p {
+      line-height: 1.5;
+    }
+    dialog td {
+      max-width: none;
+      padding: 4px 14px 4px 0;
+    }
+    kbd {
+      padding: 1px 6px;
+      border: 1px solid var(--control-border);
+      border-radius: 4px;
+      background: var(--bg);
+      font: 12px Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <a id="logo" href="https://img2img.shop" target="_blank" rel="noopener" title="img2img.shop">
+      <img class="logo-light" src="icons/logo.svg" alt="img2img, Browser Extension">
+      <img class="logo-dark" src="icons/logo-dark.svg" alt="img2img, Browser Extension">
+    </a>
+    <h1 id="pageTitle">Library</h1>
+    <!-- Open folder, and beside it the folders opened before (library.js fills the list) -->
+    <div class="seg" id="openFolderGroup">
+      <button class="btn primary" id="openFolder" title="Open a folder of your own images and videos. They stay on this computer until you process them.">Open folder&hellip;</button>
+      <button class="btn primary" id="recentBtn" title="Folders opened before" aria-haspopup="true">&#9662;</button>
+    </div>
+    <button class="btn" id="openFiles" title="Open single images and videos">Open files&hellip;</button>
+    <button class="btn icon" id="back" title="Back">&lsaquo;</button>
+    <button class="btn icon" id="fwd" title="Forward">&rsaquo;</button>
+    <div id="crumbs"></div>
+    <button class="btn" id="saveBtn" title="Save results to Downloads">Save &#9662;</button>
+    <button class="btn icon" id="toggleLeft" title="Show or hide the left pane">&#9703;</button>
+    <button class="btn icon" id="toggleRight" title="Show or hide the right pane">&#9704;</button>
+    <button class="btn icon" id="help" title="Keyboard shortcuts (?)">?</button>
+    <span id="themeSlot"></span>
+  </div>
+
+  <div id="panes">
+    <aside id="left">
+      <div class="pane-h">Folders</div>
+      <div id="tree"></div>
+      <label id="subRow"><input type="checkbox" id="includeSub"> Include subfolders</label>
+      <div id="filesHost">
+        <div id="filesPanel">
+          <div id="filesBar">
+            <input type="search" id="search" placeholder="Search file names&hellip;">
+            <div class="seg" id="views">
+              <button class="btn icon" data-view="thumbs" title="Thumbnails">&#9638;</button>
+              <button class="btn icon" data-view="list" title="List">&#9776;</button>
+              <button class="btn icon" data-view="details" title="Details">&#9636;</button>
+            </div>
+            <input type="range" id="size" min="56" max="260" title="Thumbnail size">
+            <select id="sort" title="Sort by">
+              <option value="name">Name</option>
+              <option value="date">Date</option>
+              <option value="size">Size</option>
+              <option value="dims">Dimensions</option>
+              <option value="type">Type</option>
+              <option value="status">Status</option>
+            </select>
+            <button class="btn icon" id="dir" title="Ascending or descending">&uarr;</button>
+            <select id="statusFilter" title="Show">
+              <option value="all">All files</option>
+              <option value="none">Not processed</option>
+              <option value="queued">Queued</option>
+              <option value="done">Processed</option>
+              <option value="failed">Failed</option>
+              <option value="blocked">Stopped by the safety check</option>
+            </select>
+            <select id="typeFilter" title="File type"><option value="all">All types</option></select>
+          </div>
+          <div id="files" class="thumbs"></div>
+        </div>
+      </div>
+    </aside>
+    <div class="splitter" id="splitL"></div>
+
+    <main id="centre">
+      <div id="gridHost" hidden></div>
+      <div id="viewerWrap">
+        <div id="viewerBar">
+          <button class="btn icon" id="prev" title="Previous (Left arrow)">&lsaquo;</button>
+          <button class="btn icon" id="next" title="Next (Right arrow)">&rsaquo;</button>
+          <span id="vName"></span><span id="vCount"></span>
+          <span class="grow"></span>
+          <div class="seg">
+            <button class="btn" id="zFit" title="Fit (0)">Fit</button>
+            <button class="btn" id="zFill" title="Fill">Fill</button>
+            <button class="btn" id="z100" title="100% (1)">100%</button>
+          </div>
+          <input type="range" id="zoom" min="5" max="400" title="Zoom (Ctrl + wheel)"><span id="zoomPct"></span>
+          <div class="seg" id="compare">
+            <button class="btn" data-cmp="result" title="The result; hold Space to see the original">Result</button>
+            <button class="btn" data-cmp="split" title="The original and the result, one over the other with a divider to drag across them">Slider</button>
+            <button class="btn" data-cmp="side" title="The original and the result next to each other">Side by side</button>
+          </div>
+          <button class="btn icon" id="stripBtn" title="Filmstrip">&#9645;</button>
+          <button class="btn icon" id="gridBtn" title="All files as a grid (Enter)">&#9638;</button>
+          <button class="btn icon" id="full" title="Full screen (F)">&#9974;</button>
+        </div>
+        <div id="viewer">
+          <div id="canvas" hidden>
+            <img id="vOrig" alt="">
+            <video id="vVid" muted playsinline preload="auto" hidden></video>
+            <img id="vRes" alt="" hidden>
+          </div>
+          <div id="vMsg">
+            <div id="drop">
+              <p><b>Open a folder of your own images and videos</b><br>or drop a folder or files here</p>
+              <button class="btn primary" id="openFolderHere">Open folder&hellip;</button>
+              <p class="small">Opening a folder uploads nothing: your files stay on this computer until you process them.</p>
+              <p class="small" id="whereLine"></p>
+              <!-- The folders opened before (library.js): one click opens one again -->
+              <div id="recent" hidden>
+                <p class="small">Opened before</p>
+                <div id="recentList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="vidBar" hidden>
+          <button class="btn icon" id="vPlay" title="Play or pause (Space)">&#9654;</button>
+          <button class="btn icon" id="vBack" title="Back one frame (,)">&#9666;</button>
+          <button class="btn icon" id="vFwd" title="Forward one frame (.)">&#9656;</button>
+          <div id="scrubWrap"><div id="marks"></div><input type="range" id="scrub" min="0" max="1" step="0.001" value="0" aria-label="Position in the video"></div>
+          <span id="vTime"></span>
+        </div>
+        <div id="strip" hidden></div>
+      </div>
+    </main>
+
+    <div class="edge" id="edgeR"></div>
+    <aside id="right">
+      <!-- The popup itself, so the workflow and its settings are the same ones, kept in the same place -->
+      <iframe id="popup" src="popup.html?embedded" title="Workflow and settings"></iframe>
+      <div id="run">
+        <button class="btn primary" id="runSel" disabled>Process selected</button>
+        <button class="btn danger" id="stopBtn" hidden>Stop</button>
+      </div>
+      <div id="infoPane">
+        <div class="pane-h">Info</div>
+        <div id="info"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="status">
+    <span id="sCounts"></span>
+    <button id="queueBtn"></button>
+    <span class="grow"></span>
+    <span id="sWhere"></span>
+    <div id="queue" hidden>
+      <div class="hd">
+        <b>Queue</b>
+        <button class="btn" id="qRetry">Retry failed</button>
+        <button class="btn danger" id="qStop">Stop all</button>
+      </div>
+      <div id="queueList"></div>
+    </div>
+  </div>
+
+  <div class="menu" id="ctx" hidden></div>
+  <div class="menu" id="saveMenu" hidden></div>
+  <div class="menu" id="recentMenu" hidden></div>
+  <input type="file" id="pickFolder" webkitdirectory multiple hidden>
+  <input type="file" id="pickFiles" accept="image/*,video/*" multiple hidden>
+
+  <dialog id="ask">
+    <form method="dialog">
+      <p id="askText"></p>
+      <div class="buttons">
+        <button class="btn" value="cancel">Cancel</button>
+        <button class="btn primary" value="ok" autofocus>Go ahead</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="keys">
+    <form method="dialog">
+      <p><b>Keyboard shortcuts</b></p>
+      <table>
+        <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>Home</kbd> <kbd>End</kbd></td><td>Move between files</td></tr>
+        <tr><td><kbd>Enter</kbd> or double-click</td><td>Switch between one file and the grid</td></tr>
+        <tr><td>hold <kbd>Space</kbd></td><td>See the original</td></tr>
+        <tr><td><kbd>Space</kbd>, <kbd>,</kbd> <kbd>.</kbd></td><td>In a video: play or pause, back or forward one frame</td></tr>
+        <tr><td><kbd>Ctrl</kbd> + wheel, <kbd>0</kbd>, <kbd>1</kbd></td><td>Zoom, fit, 100%</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd></td><td>Select all, invert the selection</td></tr>
+        <tr><td><kbd>Ctrl</kbd>-click, <kbd>Shift</kbd>-click</td><td>Add to the selection, select a range</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Process what is selected</td></tr>
+        <tr><td><kbd>Delete</kbd></td><td>Delete the result shown</td></tr>
+        <tr><td><kbd>F</kbd>, <kbd>Esc</kbd></td><td>Full screen, close</td></tr>
+      </table>
+      <div class="buttons"><button class="btn" autofocus>Close</button></div>
+    </form>
+  </dialog>
+
+  <!-- The content script too, which the browser doesn't put in the extension's own pages: reading an image, the
+       settings, the cache and the job queue are its (see isLibrary there, and library.js) -->
+  <script src="shared/workflows.js"></script>
+  <script src="shared/custom-workflows.js"></script>
+  <script src="shared/images.js"></script>
+  <script src="shared/sites.js"></script>
+  <script src="content.js"></script>
+  <script src="library.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-// Dark mode for every extension page (the popup, My workflows, the cached images page, the result viewer and the
-// comparison): one setting, darkMode in chrome.storage.local, that follows the system until it's switched. It's shown
+// Dark mode for every extension page (the popup, My workflows, the cached images page and the result viewer):
+// one setting, darkMode in chrome.storage.local, that follows the system until it's switched. It's shown
 // as data-theme="dark" or "light" on <html>, which each page's styles follow. Load this in <head>, before the page's
 // own scripts: a copy of the last theme in localStorage applies at once, so pages don't flash the other one while
 // chrome.storage answers.

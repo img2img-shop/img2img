@@ -17,31 +17,55 @@
 //                                         // in this order. min and max are the range the popup's slider offers:
 //                                         // the node's own limits unless the workflows page narrowed them.
 //     layout }                            // how ComfyUI showed it (workflowLayout), for the workflows page
+// A setting can also be a switch for a whole node, { node, label, kind: 'bypass', pass }: switched off in the
+// popup, the node is skipped the way ComfyUI skips a bypassed one. pass says which of its inputs takes the place
+// of each of its outputs, { outputSlot: inputName } (see bypassPlan). With mute: true in place of pass, the node
+// is muted instead, as in ComfyUI: nothing comes out of it, and what read it is left unconnected (see canMute).
+// A text input can offer choices written on the My workflows page in place of a text box,
+// { node, input, label, kind: 'pick', options: [label, ...], values: [text, ...] }: a dropdown in the popup, or
+// with slider: true a slider that steps through them in the order they were written. Each choice is a label the
+// popup shows and the text that goes into the input when it's picked; values lines up with options, with '' where
+// a label is itself the text, and is left out when every label is. The popup saves the label picked. It also
+// offers None ahead of them, saved as '', which leaves the input empty (see PICK_NONE).
 // The popup saves the values of those settings in customWorkflowValues[id]["node.input"], for a seed whether
-// it's a new random one each time in customWorkflowValues[id]["node.input:random"], and the source picked for a
-// source picker in customWorkflowValues[id]["source:group"] (unset: the source selected in the popup's grid).
+// it's a new random one each time in customWorkflowValues[id]["node.input:random"], for a node's switch whether
+// it's off in customWorkflowValues[id]["bypass:node"], and the source picked for a source picker in
+// customWorkflowValues[id]["source:group"] (unset: the source selected in the popup's grid).
 
 const CUSTOM_WORKFLOW_PREFIX = 'custom:';
+const BYPASS_KEY_PREFIX = 'bypass:';
+
+// The key of a setting's value in customWorkflowValues (and of the setting itself on the My workflows page)
+// Used by: web pages, the result tab, the Library, the popup, My workflows, the img2img server.
+function settingKey(setting) {
+  return setting.kind === 'bypass' ? `${BYPASS_KEY_PREFIX}${setting.node}` : `${setting.node}.${setting.input}`;
+}
 const CUSTOM_WORKFLOW_INPUT_GATE = 'img2img-input-gate';
 const CUSTOM_WORKFLOW_RESULT_GATE = 'img2img-result-gate';
 const CUSTOM_WORKFLOW_SOURCE_GATE = 'img2img-source-gate'; // one per source image: `${this}:${node}:${index}`
 
+// Used by: web pages, the result tab, the Library, the popup, the background script, the img2img server.
 function isCustomWorkflow(workflow) {
   return typeof workflow === 'string' && workflow.startsWith(CUSTOM_WORKFLOW_PREFIX);
 }
 
+// Used by: web pages, the result tab, the Library, the popup, the background script, the img2img server.
 function customWorkflowId(workflow) {
   return isCustomWorkflow(workflow) ? workflow.slice(CUSTOM_WORKFLOW_PREFIX.length) : null;
 }
 
+// Used by: web pages, the result tab, the Library, My workflows.
 const isLink = value => Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && Number.isInteger(value[1]);
+// Used by: My workflows.
 const inputSpecs = info => ({ ...info?.input?.required, ...info?.input?.optional });
 // A dynamic combo option's own inputs (its inputs are under "inputs", a node's under "input")
+// Used by: My workflows.
 const optionSpecs = option => ({ ...option?.inputs?.required, ...option?.inputs?.optional });
 
 // Input types the ComfyUI frontend shows as widgets (they have a value in widgets_values); everything else is a
 // socket. A list type is a combo.
 const WIDGET_TYPES = ['INT', 'FLOAT', 'STRING', 'BOOLEAN', 'COMBO', 'COMFY_DYNAMICCOMBO_V3'];
+// Used by: My workflows.
 function isWidgetSpec(spec) {
   const [type, config = {}] = spec || [];
   return (Array.isArray(type) || WIDGET_TYPES.includes(type)) && !config.forceInput && !config.socketless;
@@ -54,6 +78,7 @@ const MODE_BYPASSED = 4;
 
 // Whether a socket of type `a` connects to one of type `b`, as LiteGraph decides it: '*' or no type fits anything,
 // and "A,B" lists fit when they share a type
+// Used by: My workflows.
 function typesConnect(a, b) {
   if (!a || a === '*' || !b || b === '*' || a === b) return true;
   const [left, right] = [a, b].map(type => String(type).toLowerCase().split(','));
@@ -63,6 +88,7 @@ function typesConnect(a, b) {
 // The input a bypassed node passes on in place of output `slot` (carrying `type`), the way ComfyUI's frontend picks
 // it: the input in the same slot when its type fits, else the first of exactly that type, else the first that fits.
 // -1 when none does. (Not "the first of the type": a bypassed ControlNet apply would pass positive on as negative.)
+// Used by: My workflows.
 function bypassedInput(node, slot, type) {
   const inputs = node.inputs || [];
   if (!type || type === '*') return inputs.length > slot ? slot : 0;
@@ -72,9 +98,95 @@ function bypassedInput(node, slot, type) {
   return exact >= 0 ? exact : inputs.findIndex(fits);
 }
 
+// The outputs of a node that other nodes read, as a Map of output slot -> whether every input reading it is one
+// its node can do without (an optional input)
+// Used by: My workflows.
+function readOutputs(graph, objectInfo, nodeId) {
+  const slots = new Map();
+  for (const other of Object.values(graph)) {
+    const optional = objectInfo?.[other.class_type]?.input?.optional || {};
+    for (const [name, value] of Object.entries(other.inputs || {})) {
+      if (isLink(value) && value[0] === String(nodeId)) slots.set(value[1], (slots.get(value[1]) ?? true) && name in optional);
+    }
+  }
+  return slots;
+}
+
+// Whether the workflow file has a node switched off (muted or bypassed): it stays off unless the popup turns it on
+// Used by: web pages, the result tab, the Library, the popup, My workflows, the img2img server.
+function fileSwitchedOff(graph, nodeId) {
+  return Boolean(graph?.[nodeId]?._meta?.mode);
+}
+
+// Whether a node with a switch in the popup is off: turned off there, or off in the file and not turned on there.
+// What's saved is whether it's left out (true), or for a node off in the file, false once it's turned on.
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
+function nodeSwitchedOff(definition, setting, values) {
+  const saved = values?.[settingKey(setting)];
+  return saved === true || (saved === undefined && fileSwitchedOff(definition?.graph, setting.node));
+}
+
+// Whether a node can be muted, as ComfyUI mutes one: nothing comes out of it, so what read it is left
+// unconnected. Any node something reads can be, as in ComfyUI, which is also what says so when the result can't
+// be made that way (a node on the way to it needs what's gone); a node nothing reads has nothing to switch.
+// Used by: My workflows, the img2img server.
+function canMute(graph, nodeId) {
+  return Boolean(graph[nodeId]) && readOutputs(graph, null, nodeId).size > 0;
+}
+
+// What a node of an API graph passes on when it's switched off: { outputSlot: inputName } for every output another
+// node reads, picked as ComfyUI picks it for a bypassed node (bypassedInput), from the node's definition. An output
+// whose input, by that pick, has nothing connected (or that has none) has no entry: what reads it is left unconnected, which
+// works when those inputs are all optional. Null when the node can't be left out: nothing reads it, such an
+// output feeds an input its node needs, or its definition isn't known (ComfyUI not running, or the node not
+// installed).
+// Used by: My workflows, the img2img server.
+function bypassPlan(graph, objectInfo, nodeId) {
+  const node = graph[nodeId];
+  const info = objectInfo?.[node?.class_type];
+  if (!node || !info) return null;
+  const slots = readOutputs(graph, objectInfo, nodeId);
+  if (!slots.size) return null;
+  // The node's slots as the frontend has them: its sockets, then its widgets
+  const typeName = type => Array.isArray(type) ? 'COMBO' : type;
+  const specs = Object.entries(inputSpecs(info));
+  const inputs = [...specs.filter(([, spec]) => !isWidgetSpec(spec)), ...specs.filter(([, spec]) => isWidgetSpec(spec))]
+    .map(([name, spec]) => ({ name, type: typeName(spec[0]) }));
+  const outputs = (info.output || []).map(type => ({ type: typeName(type) }));
+  const connected = input => input && isLink(node.inputs[input.name]);
+  const pass = {};
+  for (const [slot, optional] of slots) {
+    const type = outputs[slot]?.type;
+    const input = inputs[bypassedInput({ inputs, outputs }, slot, type)];
+    // Nothing connected to stand in for it: fine where only optional inputs read it (they're left unconnected,
+    // as ComfyUI leaves them), and otherwise the workflow can't run without the node
+    if (connected(input)) pass[slot] = input.name;
+    else if (!optional) return null;
+  }
+  return pass;
+}
+
+// Takes a node out of a graph the way a bypass does: whatever read one of its outputs reads what went into the
+// input that stands in for it (pass, from bypassPlan), or nothing when no input does
+// Used by: web pages, the result tab, the Library, the img2img server.
+function bypassNode(graph, nodeId, pass) {
+  const node = graph[nodeId];
+  if (!node) return;
+  for (const other of Object.values(graph)) {
+    for (const [name, value] of Object.entries(other.inputs || {})) {
+      if (!isLink(value) || value[0] !== String(nodeId)) continue;
+      const source = node.inputs[pass?.[value[1]]];
+      if (source === undefined) delete other.inputs[name];
+      else other.inputs[name] = source;
+    }
+  }
+  delete graph[nodeId];
+}
+
 // Read an uploaded workflow file: ComfyUI's API export as it is, or a saved workflow (nodes and links)
 // converted with the installed nodes' definitions (ComfyUI's /object_info). Returns { graph, format, warnings },
 // and for a saved workflow its layout (workflowLayout).
+// Used by: My workflows, the img2img server.
 function parseComfyWorkflow(json, objectInfo) {
   if (json && typeof json === 'object' && !Array.isArray(json)) {
     const entries = Object.values(json);
@@ -93,7 +205,11 @@ function parseComfyWorkflow(json, objectInfo) {
 
 // A saved workflow (the frontend's graph: nodes, links, subgraphs) to the API format the server runs, the way
 // the frontend's "Export (API)" does it: subgraphs are flattened, notes dropped, reroutes and primitive nodes
-// wired through, muted nodes removed and bypassed ones skipped over.
+// wired through. A node the file has muted or bypassed stays in the graph, wired as if it ran, with how it is off
+// in its _meta (mode 'muted' or 'bypassed', and for a bypass what it passes on, as pass: see fileSwitchedOff), so it
+// can be set up and switched on in the popup; buildCustomWorkflow takes it out as the file has it otherwise. One that
+// isn't installed, or a subgraph, is removed or skipped over here, as the export does.
+// Used by: the img2img server.
 function uiWorkflowToApi(ui, objectInfo) {
   const warnings = [];
   const subgraphs = new Map((ui.definitions?.subgraphs || []).map(subgraph => [subgraph.id, subgraph]));
@@ -101,6 +217,10 @@ function uiWorkflowToApi(ui, objectInfo) {
   // Where each node output really comes from, once reroutes, primitives, bypasses and subgraph boundaries are
   // followed: a link [apiNodeId, slot], or { value } for a primitive's value. Memoised per scope.
   const resolved = new Map();
+  // An off node kept in the graph (see above)
+  const keptOff = node => (node.mode === MODE_MUTED || node.mode === MODE_BYPASSED)
+    && Boolean(objectInfo?.[node.type]) && !subgraphs.has(node.type) && !UI_ONLY_NODES.includes(node.type)
+    && node.type !== 'Reroute' && node.type !== 'PrimitiveNode';
 
   // Links come as arrays [id, origin, originSlot, target, targetSlot, type] at the top level, and as objects in
   // subgraphs
@@ -138,13 +258,13 @@ function uiWorkflowToApi(ui, objectInfo) {
       result = outerSlot >= 0 ? sourceOfInput(outer, instance.id, outerSlot) : null;
     } else {
       const node = scope.nodes.get(nodeId);
-      if (!node || node.mode === MODE_MUTED) {
+      if (!node || (node.mode === MODE_MUTED && !keptOff(node))) {
         result = null;
       } else if (node.type === 'Reroute') {
         result = sourceOfInput(scope, nodeId, 0);
       } else if (node.type === 'PrimitiveNode') {
         result = { value: node.widgets_values?.[0] };
-      } else if (node.mode === MODE_BYPASSED) {
+      } else if (node.mode === MODE_BYPASSED && !keptOff(node)) {
         const index = bypassedInput(node, slot, type ?? node.outputs?.[slot]?.type);
         result = index >= 0 ? sourceOfInput(scope, nodeId, index) : null;
       } else if (subgraphs.has(node.type)) {
@@ -212,7 +332,7 @@ function uiWorkflowToApi(ui, objectInfo) {
 
   function addNodes(scope) {
     for (const node of scope.nodes.values()) {
-      if (UI_ONLY_NODES.includes(node.type) || node.mode === MODE_MUTED || node.mode === MODE_BYPASSED) continue;
+      if (UI_ONLY_NODES.includes(node.type) || ((node.mode === MODE_MUTED || node.mode === MODE_BYPASSED) && !keptOff(node))) continue;
       if (subgraphs.has(node.type)) {
         addNodes(subgraphScope(scope, node));
         continue;
@@ -227,7 +347,19 @@ function uiWorkflowToApi(ui, objectInfo) {
         if (source === null) return; // unconnected: keeps its widget value, if it has one
         inputs[input.widget?.name ?? input.name] = Array.isArray(source) ? source : source.value;
       });
-      graph[`${scope.prefix}${node.id}`] = { inputs, class_type: node.type, _meta: { title: node.title || info?.display_name || node.type } };
+      const meta = { title: node.title || info?.display_name || node.type };
+      if (node.mode === MODE_MUTED) meta.mode = 'muted';
+      if (node.mode === MODE_BYPASSED) {
+        // What it passes on, as the export would have wired it: { outputSlot: inputName } (see bypassNode)
+        meta.mode = 'bypassed';
+        meta.pass = {};
+        (node.outputs || []).forEach((output, slot) => {
+          const index = bypassedInput(node, slot, output.type);
+          const input = node.inputs?.[index];
+          if (input && sourceOfInput(scope, node.id, index) !== null) meta.pass[slot] = input.widget?.name ?? input.name;
+        });
+      }
+      graph[`${scope.prefix}${node.id}`] = { inputs, class_type: node.type, _meta: meta };
     }
   }
 
@@ -243,6 +375,7 @@ function uiWorkflowToApi(ui, objectInfo) {
 // their position, size, colours and slots, the links and the groups. A node's id is its API graph id; a subgraph
 // node has `enter` (the scope of its inside), and a subgraph's own inputs and outputs are the nodes
 // `${prefix}in` and `${prefix}out`.
+// Used by: My workflows, the img2img server.
 function workflowLayout(ui) {
   const subgraphs = new Map((ui.definitions?.subgraphs || []).map(subgraph => [subgraph.id, subgraph]));
   const scopes = {};
@@ -288,6 +421,7 @@ function workflowLayout(ui) {
 
 // A left-to-right layout for an API export (it has no positions): each node one column right of the nodes it
 // reads from, in the same shape as workflowLayout's
+// Used by: My workflows, the img2img server.
 function autoLayout(graph) {
   const column = new Map();
   const columnOf = (id, seen = new Set()) => {
@@ -325,8 +459,9 @@ function autoLayout(graph) {
 }
 
 // Nodes that can take the page image: image loaders with no connected inputs (LoadImage and the like)
+// Used by: My workflows, the img2img server.
 function imageInputNodes(graph, objectInfo) {
-  return Object.entries(graph).filter(([, node]) => {
+  return Object.entries(graph).filter(([, node]) => !node._meta?.mode).filter(([, node]) => {
     const info = objectInfo?.[node.class_type];
     const loadsImage = /load.*image|image.*load/i.test(node.class_type) && (!info || info.output?.[0] === 'IMAGE');
     return loadsImage && !Object.values(node.inputs).some(isLink);
@@ -335,9 +470,11 @@ function imageInputNodes(graph, objectInfo) {
 
 // Output nodes whose image could be the result, as [{ node, input }]: an output node (SaveImage, PreviewImage...)
 // with a connected image input
+// Used by: My workflows, the img2img server.
 function imageOutputNodes(graph, objectInfo) {
   const outputs = [];
   for (const [id, node] of Object.entries(graph)) {
+    if (node._meta?.mode) continue; // (off in the file)
     const info = objectInfo?.[node.class_type];
     const isOutput = info ? info.output_node : /save|preview/i.test(node.class_type);
     if (!isOutput) continue;
@@ -351,6 +488,7 @@ function imageOutputNodes(graph, objectInfo) {
 // The output node whose image is the result, when the user hasn't picked one: the end of the longest chain of
 // work, which is what the workflow is for (a workflow often saves or previews a step on the way too, and that
 // node can come first in the file). Ties go to the last one in the workflow's order.
+// Used by: My workflows, the img2img server.
 function defaultOutputNode(graph, objectInfo, outputs = imageOutputNodes(graph, objectInfo)) {
   if (!outputs.length) return null;
   const upstreamCount = id => {
@@ -370,6 +508,7 @@ function defaultOutputNode(graph, objectInfo, outputs = imageOutputNodes(graph, 
 }
 
 // All output nodes (they're left out when the workflow runs, except the chosen one)
+// Used by: the img2img server.
 function outputNodeIds(graph, objectInfo) {
   return Object.entries(graph).filter(([, node]) => objectInfo?.[node.class_type]?.output_node || /^(SaveImage|PreviewImage)$/.test(node.class_type)).map(([id]) => id);
 }
@@ -377,6 +516,7 @@ function outputNodeIds(graph, objectInfo) {
 // The inputs that can become popup settings: every value that isn't a link, on nodes that run, except the page
 // image loader's and the terminal output nodes' own (file names, prefixes). Each comes with the control it would
 // get.
+// Used by: My workflows, the img2img server.
 function settingCandidates(graph, objectInfo, { imageNode, outputs = [] } = {}) {
   // Every image loader's inputs are left out too: its file is the page image or a source, or stays as it is (a
   // list of the files in ComfyUI's input folder is no use in the popup). An output node that also passes its
@@ -407,6 +547,7 @@ function settingCandidates(graph, objectInfo, { imageNode, outputs = [] } = {}) 
 }
 
 // The spec of a dynamic combo's child input ("resize_type.width")
+// Used by: My workflows.
 function dynamicChildSpec(specs, name) {
   const [parent, child] = name.split('.');
   if (!child || specs[parent]?.[0] !== 'COMFY_DYNAMICCOMBO_V3') return undefined;
@@ -420,6 +561,7 @@ function dynamicChildSpec(specs, name) {
 // The popup control for an input: { kind: number | choice | toggle | text, ... }, from its ComfyUI spec, or from
 // the value alone when the node isn't installed. Null for values the popup can't edit. A seed (an integer named
 // like one) can also be a new random number each time.
+// Used by: My workflows, the img2img server.
 function describeSettingInput(spec, value, name = '') {
   const [type, config = {}] = spec || [];
   if (Array.isArray(type) || type === 'COMBO') {
@@ -454,23 +596,51 @@ const SEED_NAME = /(^|_)seed$/i;
 const RANDOM_SEED_LIMIT = 2 ** 50;
 
 // The key of a seed setting's "new random seed each time" choice in customWorkflowValues
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
 function randomSeedKey(setting) {
   return `${setting.node}.${setting.input}:random`;
 }
 
+// Used by: web pages, the result tab, the Library.
 function randomSeed(setting) {
   const low = Math.max(0, setting.min ?? 0);
   const high = Math.min(setting.max ?? RANDOM_SEED_LIMIT, RANDOM_SEED_LIMIT);
   return low + Math.floor(Math.random() * (high - low + 1));
 }
 
+// Whether a run of the workflow picks a new seed: a seed setting set to a new random one each time, or a seed left
+// at -1 in the workflow itself with no setting over it (see buildCustomWorkflow). Each run then gives another result,
+// so picking an image again runs it again rather than showing the result already cached for these settings.
+// Used by: web pages, the result tab, the img2img server.
+function usesRandomSeed(definition, values) {
+  if (!definition) return false;
+  const covered = new Set();
+  for (const setting of definition.settings || []) {
+    if (!setting.seed || setting.kind === 'bypass') continue;
+    if (values?.[randomSeedKey(setting)] === true) return true;
+    covered.add(`${setting.node}.${setting.input}`);
+  }
+  return Object.entries(definition.graph || {}).some(([id, node]) => Object.entries(node?.inputs || {})
+    .some(([name, value]) => value === -1 && SEED_NAME.test(name) && !covered.has(`${id}.${name}`)));
+}
+
 // A saved value for a setting, checked against its control: numbers outside the setting's range are clamped to
 // it, the workflow's own value included (the My workflows page can narrow a number's range, so the value saved
 // in the workflow can sit outside it), and unknown choices and wrong types fall back to the workflow's own value
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
 function settingValue(setting, saved, fallback) {
   if (setting.kind === 'number') {
     const number = Number(saved === undefined || saved === null ? fallback : saved);
     return Number.isFinite(number) ? clampToSettingRange(setting, number) : fallback;
+  }
+  if (setting.kind === 'pick') {
+    // One of its choices, by label, or None: the saved one, else the one that gives the workflow's own text, else
+    // None (the setting's own None when it has one)
+    const options = setting.options || [];
+    const none = ownNone(setting) ?? PICK_NONE;
+    if (options.includes(saved)) return saved;
+    if (saved === PICK_NONE) return none;
+    return options.find(option => option === fallback) ?? options.find(option => pickValue(setting, option) === fallback) ?? none;
   }
   if (saved === undefined || saved === null) return fallback;
   switch (setting.kind) {
@@ -485,7 +655,49 @@ function settingValue(setting, saved, fallback) {
   }
 }
 
+// Every dropdown and slider of choices also offers None, ahead of the choices written for it: the input is left
+// empty. It's saved as the empty text, which no choice's label can be.
+const PICK_NONE = '';
+
+// A choice the setting's own list calls None takes the place of that one: it sits where it was written, and puts
+// in the text written for it (nothing, when it has none)
+// Used by: web pages, the result tab, the Library, the popup.
+function ownNone(setting) {
+  return (setting.options || []).find(option => /^none$/i.test(option.trim()));
+}
+
+// What a pick setting's dropdown or slider offers, in order: None first unless the setting has its own
+// Used by: the popup, the img2img server.
+function pickList(setting) {
+  return ownNone(setting) === undefined ? [PICK_NONE, ...(setting.options || [])] : [...setting.options];
+}
+
+// The text a pick setting's choice puts into the input: the one written for it, else the label itself (nothing
+// for None, the setting's own included)
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
+function pickValue(setting, option) {
+  const value = setting.values?.[(setting.options || []).indexOf(option)];
+  if (typeof value === 'string' && value !== '') return value;
+  return option === ownNone(setting) ? '' : option;
+}
+
+// The choices written for a text setting's dropdown or slider, [{ label, value }], as the setting keeps them,
+// { options, values }: in the order written, each label once. A choice with text and no label is labelled by its
+// text; values is left out when every label is itself the text.
+// Used by: My workflows, the img2img server.
+function pickChoices(choices) {
+  const byLabel = new Map();
+  for (const choice of choices || []) {
+    const value = String(choice.value ?? '');
+    const label = String(choice.label ?? '').trim() || value.trim();
+    if (label && !byLabel.has(label)) byLabel.set(label, value.trim() === '' || value === label ? '' : value);
+  }
+  const values = [...byLabel.values()];
+  return { options: [...byLabel.keys()], ...(values.some(Boolean) ? { values } : {}) };
+}
+
 // A number inside a number setting's range, whole when the input takes integers
+// Used by: web pages, the result tab, the Library, the popup.
 function clampToSettingRange(setting, number) {
   let value = setting.integer ? Math.round(number) : number;
   if (setting.min !== null && setting.min !== undefined) value = Math.max(setting.min, value);
@@ -497,8 +709,30 @@ function clampToSettingRange(setting, number) {
 // popup's values applied, only the chosen output (as a PreviewImage, so nothing is written to ComfyUI's output
 // folder) and the NSFW gate on the page image, every source image and the result (img2img is SFW-only; a custom
 // graph can generate anything, so the result is checked too). sourceImages: { node: [base64, ...] }.
+// Used by: web pages, the result tab, the Library, the img2img server.
 function buildCustomWorkflow(definition, targetImage, values, nsfw, sourceImages = {}) {
-  const graph = neededNodes(JSON.parse(JSON.stringify(definition.graph)), [definition.outputNode, definition.imageNode, ...sourceGroups(definition).flatMap(group => group.nodes)]);
+  const whole = JSON.parse(JSON.stringify(definition.graph));
+  // Nodes switched off in the popup go first, so what only they needed is left out with them
+  const roles = new Set([definition.outputNode, definition.imageNode, ...sourceGroups(definition).flatMap(group => group.nodes)].map(String));
+  // Nodes off in the file with no switch in the popup stay off, as the file has them
+  const switched = new Set((definition.settings || []).filter(setting => setting.kind === 'bypass').map(setting => String(setting.node)));
+  for (const id of Object.keys(whole).filter(id => fileSwitchedOff(whole, id) && !switched.has(id) && !roles.has(id))) {
+    bypassNode(whole, id, whole[id]._meta.mode === 'muted' ? {} : whole[id]._meta.pass);
+  }
+  for (const setting of definition.settings || []) {
+    if (setting.kind === 'bypass' && nodeSwitchedOff(definition, setting, values) && !roles.has(String(setting.node))) {
+      bypassNode(whole, setting.node, setting.mute ? {} : setting.pass);
+    }
+  }
+  const graph = neededNodes(whole, [...roles]);
+  // What's left runs: a node off in the file but switched on goes as an ordinary node, not marked off (the graph
+  // run is also the one a result keeps)
+  for (const node of Object.values(graph)) {
+    if (node._meta?.mode) {
+      const { mode: _mode, pass: _pass, ...meta } = node._meta;
+      node._meta = meta;
+    }
+  }
   if (!graph[definition.imageNode] || !graph[definition.outputNode]) {
     throw new Error(`The workflow "${definition.name}" is missing its image input or output node: set it up again on the My workflows page`);
   }
@@ -506,10 +740,11 @@ function buildCustomWorkflow(definition, targetImage, values, nsfw, sourceImages
   graph[definition.imageNode] = { inputs: { image: targetImage }, class_type: 'ETN_LoadImageBase64', _meta: { title: loader._meta?.title || 'Input Image' } };
   for (const setting of definition.settings || []) {
     const node = graph[setting.node];
-    if (!node) continue;
-    node.inputs[setting.input] = setting.seed && values?.[randomSeedKey(setting)] === true
+    if (!node || setting.kind === 'bypass') continue;
+    const value = setting.seed && values?.[randomSeedKey(setting)] === true
       ? randomSeed(setting)
       : settingValue(setting, values?.[`${setting.node}.${setting.input}`], node.inputs[setting.input]);
+    node.inputs[setting.input] = setting.kind === 'pick' ? pickValue(setting, value) : value;
   }
   // A seed of -1 is efficiency-nodes' "a new random seed each run": its frontend script picks one when the prompt
   // is queued, so ComfyUI itself would refuse -1
@@ -539,6 +774,7 @@ function buildCustomWorkflow(definition, targetImage, values, nsfw, sourceImages
 // Only the nodes in `roots` and what they read from: every other output node (SaveImage, previews...) is left out,
 // so ComfyUI doesn't run it. An output node that also passes its image on (KSampler (Efficient)) stays when the
 // result needs it.
+// Used by: web pages, the result tab, the Library.
 function neededNodes(graph, roots) {
   const needed = new Set();
   const visit = id => {
@@ -553,12 +789,14 @@ function neededNodes(graph, roots) {
 }
 
 // shared/workflows.js's functions: globals in the extension, required under Node
+// Used by: web pages, the result tab, the Library.
 function sharedWorkflows() {
   return typeof addSafetyCheck === 'function' ? { addSafetyGate, addSafetyCheck } : require('./workflows.js');
 }
 
 // The source pickers of a definition, in order: [{ key, label, batch, nodes }] (key: the group, for
 // customWorkflowValues "source:key"; nodes in the order they get the source's images)
+// Used by: web pages, the result tab, the Library, the popup, My workflows, the img2img server.
 function sourceGroups(definition) {
   const groups = new Map();
   for (const source of definition?.sourceNodes || []) {
@@ -575,6 +813,7 @@ function sourceGroups(definition) {
 // Which Load Image nodes (other than the page image's) belong together: the ones that feed the same node, like
 // the two inputs of an ImageBatch or any other node that takes several images, whatever it is. Returns groups
 // of node ids, each in the order of the inputs they go into; a node feeding nothing shared is a group of its own.
+// Used by: My workflows, the img2img server.
 function suggestSourceGroups(graph, objectInfo, imageNode) {
   const loaders = imageInputNodes(graph, objectInfo).filter(id => id !== imageNode);
   const parent = new Map(loaders.map(id => [id, id]));
@@ -598,7 +837,136 @@ function suggestSourceGroups(graph, objectInfo, imageNode) {
   return [...groups.values()].map(group => group.sort(byPosition)).sort((a, b) => byPosition(a[0], b[0]));
 }
 
+// The first Load Image node, in the workflow's own order, that isn't one of a set feeding the same node: where
+// the page image goes when the user hasn't chosen (the sets are usually sources, like the two sides of a batch)
+// Used by: My workflows, the img2img server.
+function defaultPageImage(graph, objectInfo, imageNodes = imageInputNodes(graph, objectInfo)) {
+  const inSets = new Set(suggestSourceGroups(graph, objectInfo, null).filter(group => group.length > 1).flat());
+  return imageNodes.find(id => !inSets.has(id)) ?? imageNodes[0];
+}
+
+// Which node of another graph each node of a workflow is, as a Map of node ids: the same id where it's still
+// there with the same class (ComfyUI keeps ids when a workflow is edited), else the one node of that class not
+// matched yet that has the same title, or the only one when the node was the only one of its class before.
+// Nodes with no match are left out. For a changed version of the same workflow, and for a different workflow
+// being set up like this one.
+// Used by: My workflows, the img2img server.
+function matchWorkflowNodes(graph, other) {
+  const matched = new Map();
+  const taken = new Set();
+  for (const [id, node] of Object.entries(graph)) {
+    if (other[id]?.class_type === node.class_type) {
+      matched.set(id, id);
+      taken.add(id);
+    }
+  }
+  const ofClass = (nodes, classType) => Object.entries(nodes).filter(([, node]) => node.class_type === classType);
+  for (const [id, node] of Object.entries(graph)) {
+    if (matched.has(id)) continue;
+    const free = ofClass(other, node.class_type).filter(([otherId]) => !taken.has(otherId));
+    const titled = node._meta?.title ? free.filter(([, candidate]) => candidate._meta?.title === node._meta.title) : [];
+    const match = titled.length === 1 ? titled[0] : free.length === 1 && ofClass(graph, node.class_type).length === 1 ? free[0] : null;
+    if (match) {
+      matched.set(id, match[0]);
+      taken.add(match[0]);
+    }
+  }
+  return matched;
+}
+
+// A workflow's setup carried over to another graph: where its page image, sources and result go and which
+// inputs are popup settings, each on the node matchWorkflowNodes finds for it. For the workflow's own changed
+// file, so a small change in ComfyUI doesn't mean setting it up again, and for a new workflow set up like an
+// existing one. What has no node to go to is left out and named in `lost`, in the user's words; a Load Image
+// node the graph newly has becomes a source, as in a new workflow. carryValues(values) carries the popup's saved
+// values of the workflow the same way, under the keys of the nodes they belong to now.
+// Used by: My workflows, the img2img server.
+function carryWorkflowSetup(definition, graph, objectInfo) {
+  const nodes = matchWorkflowNodes(definition.graph, graph);
+  const name = id => {
+    const node = definition.graph[id];
+    return node ? `"${node._meta?.title || node.class_type}"` : `node ${id}`;
+  };
+  const lost = [];
+  const imageNodes = imageInputNodes(graph, objectInfo);
+  const pageNode = nodes.get(definition.imageNode);
+  const imageNode = imageNodes.includes(pageNode) ? pageNode : defaultPageImage(graph, objectInfo, imageNodes);
+  if (imageNode !== pageNode) lost.push(`The page image went into ${name(definition.imageNode)}, which this workflow doesn't have: check where it goes now.`);
+  const resultNode = nodes.get(definition.outputNode);
+  const outputNode = imageOutputNodes(graph, objectInfo).some(output => output.node === resultNode) ? resultNode : undefined;
+  if (!outputNode) lost.push(`The result came from ${name(definition.outputNode)}, which this workflow doesn't have: check where it comes from now.`);
+  // Each source keeps the nodes it still has, under its key unless that node is gone
+  const sourceNodes = [];
+  const groupKeys = new Map();
+  for (const group of sourceGroups(definition)) {
+    const kept = group.nodes.map(node => nodes.get(node)).filter(node => imageNodes.includes(node) && node !== imageNode);
+    if (!kept.length) {
+      lost.push(`The source "${group.label}" went into ${group.nodes.map(name).join(' and ')}, which this workflow doesn't have.`);
+      continue;
+    }
+    if (kept.length < group.nodes.length) lost.push(`The source "${group.label}" went into ${group.nodes.length} nodes; this workflow has ${kept.length} of them.`);
+    const key = kept.includes(nodes.get(group.key)) ? nodes.get(group.key) : kept[0];
+    groupKeys.set(group.key, key);
+    kept.forEach(node => sourceNodes.push({ node, label: group.label, batch: group.batch, group: key }));
+  }
+  // Load Image nodes that are new here get a source each, joining the picker of the nodes they feed a node with
+  const carriedNodes = new Set(nodes.values());
+  for (const group of suggestSourceGroups(graph, objectInfo, imageNode)) {
+    const fresh = group.filter(node => !carriedNodes.has(node));
+    if (!fresh.length) continue;
+    const together = group.map(node => sourceNodes.find(source => source.node === node)).find(Boolean);
+    const titled = fresh.map(node => graph[node]._meta?.title).find(title => title && !/^load ?image$/i.test(title));
+    const label = together?.label || titled || (sourceNodes.length ? `Source ${new Set(sourceNodes.map(source => source.group)).size + 1}` : 'Source');
+    fresh.forEach(node => sourceNodes.push({ node, label, batch: false, group: together?.group || fresh[0] }));
+  }
+  // A setting stays where its node is there and the input still takes a value
+  const outputs = [...outputNodeIds(graph, objectInfo), ...sourceNodes.map(source => source.node)];
+  const candidates = new Set(settingCandidates(graph, objectInfo, { imageNode, outputs }).map(candidate => `${candidate.node}.${candidate.input}`));
+  const settings = [];
+  const fixed = new Set([imageNode, ...imageNodes, ...outputs]);
+  for (const setting of definition.settings || []) {
+    const node = nodes.get(setting.node);
+    if (setting.kind === 'bypass') {
+      // A node's switch stays where the node is there and can still be left out (as worked out before when this
+      // ComfyUI doesn't know the node)
+      const known = node !== undefined && objectInfo?.[graph[node].class_type];
+      const there = node !== undefined && !fixed.has(node);
+      const pass = !there || setting.mute ? null : known ? bypassPlan(graph, objectInfo, node) : setting.pass;
+      if (there && setting.mute && canMute(graph, node)) settings.push({ ...setting, node });
+      else if (pass) settings.push({ ...setting, node, pass });
+      else lost.push(`The switch "${setting.label}" was for ${name(setting.node)}, which this workflow ${node === undefined ? "doesn't have" : "can't run without"}.`);
+      continue;
+    }
+    if (node !== undefined && candidates.has(`${node}.${setting.input}`)) {
+      settings.push({ ...setting, node });
+    } else {
+      lost.push(`The setting "${setting.label}" (${setting.input} of ${name(setting.node)}) has no input to go to in this workflow.`);
+    }
+  }
+  const carryValues = values => {
+    const carried = {};
+    for (const [key, value] of Object.entries(values || {})) {
+      if (key.startsWith('source:')) {
+        const group = groupKeys.get(key.slice('source:'.length));
+        if (group !== undefined) carried[`source:${group}`] = value;
+        continue;
+      }
+      if (key.startsWith(BYPASS_KEY_PREFIX)) {
+        const switched = nodes.get(key.slice(BYPASS_KEY_PREFIX.length));
+        if (switched !== undefined) carried[`${BYPASS_KEY_PREFIX}${switched}`] = value;
+        continue;
+      }
+      const dot = key.indexOf('.');
+      const node = dot < 0 ? undefined : nodes.get(key.slice(0, dot));
+      if (node !== undefined) carried[node + key.slice(dot)] = value;
+    }
+    return carried;
+  };
+  return { imageNode, outputNode, sourceNodes, settings, lost, carryValues };
+}
+
 // The images for each source node, { node: [image, ...] }, from imagesOf(groupKey) (a picked source's images)
+// Used by: web pages, the result tab, the Library, the img2img server.
 function sourceImagesByNode(definition, imagesOf) {
   const byNode = {};
   for (const group of sourceGroups(definition)) {
@@ -617,6 +985,7 @@ function sourceImagesByNode(definition, imagesOf) {
 
 // A source node's images: its loader gets the first one; with batch on, the others get loaders of their own and
 // ImageBatch nodes join them all. Each image passes the NSFW gate before anything uses it.
+// Used by: web pages, the result tab, the Library.
 function addSourceImages(graph, source, images, nsfw, workflowName) {
   const node = graph[source.node];
   if (!node) return;
@@ -649,12 +1018,20 @@ function addSourceImages(graph, source, images, nsfw, workflowName) {
 
 // What changes a custom workflow's result, for the extension's cache key. (With a random seed, an image already
 // processed with these settings shows its cached result again; another image gets a new seed.)
+// Used by: the img2img server.
 function customWorkflowCacheKey(definition, values, defaultSourceId = null) {
   const own = {};
   for (const group of sourceGroups(definition)) {
     own[`source:${group.key}`] = { id: values?.[`source:${group.key}`] || defaultSourceId, batch: group.batch, nodes: group.nodes };
   }
   for (const setting of definition?.settings || []) {
+    if (setting.kind === 'bypass') {
+      // Only when it's off: on is how the workflow ran before it had the switch
+      if (values?.[settingKey(setting)] === true) own[settingKey(setting)] = true;
+      // (and for a node off in the file, when it's turned on)
+      if (values?.[settingKey(setting)] === false && fileSwitchedOff(definition.graph, setting.node)) own[settingKey(setting)] = false;
+      continue;
+    }
     for (const key of [`${setting.node}.${setting.input}`, ...(setting.seed ? [randomSeedKey(setting)] : [])]) {
       if (values?.[key] !== undefined) own[key] = values[key];
     }
@@ -667,6 +1044,8 @@ if (typeof module !== 'undefined' && module.exports) {
     CUSTOM_WORKFLOW_PREFIX, CUSTOM_WORKFLOW_INPUT_GATE, CUSTOM_WORKFLOW_RESULT_GATE, CUSTOM_WORKFLOW_SOURCE_GATE, isCustomWorkflow,
     customWorkflowId, parseComfyWorkflow, uiWorkflowToApi, workflowLayout, autoLayout, sourceGroups, suggestSourceGroups,
     sourceImagesByNode, imageInputNodes, imageOutputNodes, defaultOutputNode, outputNodeIds, settingCandidates,
-    describeSettingInput, settingValue, randomSeedKey, buildCustomWorkflow, customWorkflowCacheKey,
+    describeSettingInput, settingValue, randomSeedKey, usesRandomSeed, buildCustomWorkflow, customWorkflowCacheKey, defaultPageImage,
+    matchWorkflowNodes, carryWorkflowSetup, BYPASS_KEY_PREFIX, settingKey, bypassPlan, bypassNode, canMute, fileSwitchedOff, nodeSwitchedOff,
+    pickChoices, pickValue, pickList, PICK_NONE,
   };
 }

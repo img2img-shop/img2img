@@ -3,7 +3,7 @@
 // hash when it's shown, and the next one ahead of time. Thumbnails are made here the first time they're needed and
 // saved with their result, so the strip never loads every full image.
 
-const elements = Object.fromEntries(['stage', 'frame', 'image', 'download', 'delete', 'prev', 'next', 'message', 'strip', 'bar', 'caption', 'counter', 'manual', 'auto', 'interval', 'fullscreen', 'fullscreenIcon']
+const elements = Object.fromEntries(['stage', 'frame', 'image', 'download', 'delete', 'prev', 'next', 'message', 'strip', 'bar', 'caption', 'counter', 'manual', 'auto', 'interval', 'downloadAll', 'purge', 'fullscreen', 'fullscreenIcon']
   .map(id => [id, document.getElementById(id)]));
 
 const THUMBNAIL_HEIGHT = 96; // twice the strip's, for sharp thumbnails on high-density screens
@@ -188,52 +188,169 @@ async function thumbnailOf(dataUrl) {
   const image = new Image();
   image.src = dataUrl;
   await image.decode();
-  const scale = Math.min(1, THUMBNAIL_HEIGHT / image.naturalHeight);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-  const webp = canvas.toDataURL('image/webp', 0.8);
+  const canvas = smallCanvas(image, image.naturalWidth, image.naturalHeight, { maxHeight: THUMBNAIL_HEIGHT });
+  const webp = canvas.toDataURL(...THUMBNAIL_FORMAT);
   return webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/jpeg', 0.8);
 }
 
 // Saved as "<name>-img2img.<ext>" like the on-page button, through background.js. Always available here, also for
-// results downloaded before (the on-page button greys those out)
-elements.download.addEventListener('click', () => {
-  const dataUrl = elements.image.src;
+// results downloaded before (the on-page button greys those out). With Double Download on (the downloadOriginal
+// setting), the original goes along, fetched by background.js from the URL the entry was made from, the one thing
+// this page has of it; a video's frame has no such URL, and says so.
+// Resolves {} once saved, { error } when the result wasn't, { originalError } when only the original wasn't.
+async function downloadEntry(entry, dataUrl, withOriginal) {
   const mimeType = dataUrl.match(/^data:([^;,]+)/)?.[1] || 'image/png';
   const extension = mimeType.split('/')[1] === 'jpeg' ? 'jpg' : mimeType.split('/')[1];
-  const baseName = nameOf(entries[index]).replace(/[\\/:*?"<>|]/g, '_') || 'image';
-  chrome.runtime.sendMessage({ action: 'downloadImage', dataUrl, filename: `${baseName}-img2img.${extension}` });
+  const baseName = nameOf(entry).replace(/[\\/:*?"<>|]/g, '_') || 'image';
+  const filename = `${baseName}-img2img.${extension}`;
+  const response = await chrome.runtime.sendMessage({ action: 'downloadImage', dataUrl, filename }).catch(error => ({ error: error.message }));
+  if (!response?.success) return { error: response?.error || 'no answer' };
+  if (!withOriginal) return {};
+  const saved = await chrome.runtime.sendMessage({ action: 'downloadOriginal', url: entry.imageUrl || '', name: filename }).catch(error => ({ error: error.message }));
+  return saved?.success ? {} : { originalError: saved?.error || 'no answer' };
+}
+
+async function doubleDownload() {
+  const { downloadOriginal } = await chrome.storage.local.get('downloadOriginal');
+  return downloadOriginal === true;
+}
+
+elements.download.addEventListener('click', async () => {
+  const outcome = await downloadEntry(entries[index], elements.image.src, await doubleDownload());
+  if (outcome.originalError) alert(`The original image couldn't be saved: ${outcome.originalError}`);
 });
 
+// Download all: every cached image, newest first, one at a time, each saved as its own download button saves it
+// (with its original too while Double Download is on). The button counts them off and stops the rest when clicked
+// again; closing the page stops them as well. Images deleted meanwhile are skipped. What couldn't be saved is
+// told once at the end, with how many.
+let downloadingAll = false;
+let stopDownloadingAll = false;
+
+function showDownloadAllProgress(done, total) {
+  elements.downloadAll.textContent = downloadingAll ? `Stop (${done} / ${total})` : 'Download all';
+  elements.downloadAll.title = downloadingAll ? 'Stop downloading the rest' : 'Download every image in the cache';
+  elements.downloadAll.classList.toggle('busy', downloadingAll);
+}
+
+async function downloadAll() {
+  if (downloadingAll) {
+    stopDownloadingAll = true;
+    return;
+  }
+  const queue = [...entries];
+  if (!queue.length) return;
+  downloadingAll = true;
+  stopDownloadingAll = false;
+  const withOriginal = await doubleDownload();
+  let saved = 0;
+  let gone = 0;
+  const failed = [];
+  const originalsFailed = [];
+  for (const [i, entry] of queue.entries()) {
+    if (stopDownloadingAll) break;
+    showDownloadAllProgress(i, queue.length);
+    if (!entries.includes(entry)) {
+      gone++;
+      continue;
+    }
+    const dataUrl = await (loaded.get(entry.hash) || chrome.runtime.sendMessage({ action: 'getFromCache', hash: entry.hash })
+      .then(response => (response?.success && response.result) || null, () => null));
+    if (!dataUrl) {
+      gone++;
+      continue;
+    }
+    const outcome = await downloadEntry(entry, dataUrl, withOriginal);
+    if (outcome.error) {
+      failed.push(`${nameOf(entry)}: ${outcome.error}`);
+    } else {
+      saved++;
+      if (outcome.originalError) originalsFailed.push(`${nameOf(entry)}: ${outcome.originalError}`);
+    }
+  }
+  downloadingAll = false;
+  showDownloadAllProgress();
+  const problems = [];
+  if (failed.length) problems.push(`${failed.length} image${failed.length === 1 ? '' : 's'} couldn't be saved:\n${listed(failed)}`);
+  if (originalsFailed.length) problems.push(`The original of ${originalsFailed.length} image${originalsFailed.length === 1 ? '' : 's'} couldn't be saved:\n${listed(originalsFailed)}`);
+  if (problems.length) alert(`${saved} of ${queue.length - gone} downloaded.\n\n${problems.join('\n\n')}`);
+}
+
+// The first few of a list of problems, one to a line
+function listed(lines, most = 8) {
+  return lines.slice(0, most).join('\n') + (lines.length > most ? `\n… and ${lines.length - most} more` : '');
+}
+elements.downloadAll.addEventListener('click', downloadAll);
+
 // Asks whether to delete, unless the user ticked "Don't ask again" before (cacheDeleteNoConfirm in chrome.storage.local).
-// Resolves true to delete. Auto mode waits while it's open.
+// files are the files the result was downloaded as (downloadedFilesOf): with any, the question is asked whatever
+// was ticked, with a box for deleting them too. Resolves { deleteFiles } to delete, null to keep. Auto mode waits
+// while it's open.
 const confirmDelete = document.getElementById('confirmDelete');
-async function deleteConfirmed() {
+async function deleteConfirmed(files = []) {
   const { cacheDeleteNoConfirm } = await chrome.storage.local.get('cacheDeleteNoConfirm');
-  if (cacheDeleteNoConfirm) return true;
+  if (cacheDeleteNoConfirm && files.length === 0) return { deleteFiles: false };
   clearTimeout(timer);
+  await offerFileDeletion(files);
   document.getElementById('dontAskDelete').checked = false;
   confirmDelete.returnValue = '';
   confirmDelete.showModal();
   await new Promise(resolve => confirmDelete.addEventListener('close', resolve, { once: true }));
   const confirmed = confirmDelete.returnValue === 'delete';
-  if (confirmed && document.getElementById('dontAskDelete').checked) {
+  if (confirmed && files.length === 0 && document.getElementById('dontAskDelete').checked) {
     chrome.storage.local.set({ cacheDeleteNoConfirm: true });
   }
   if (!confirmed) schedule();
-  return confirmed;
+  return confirmed ? { deleteFiles: files.length > 0 && document.getElementById('deleteFile').checked } : null;
 }
 
-// Delete the image shown from the cache; the next one takes its place
+// The dialog's row for the files the result was downloaded as: there, with their names, when there are any, in
+// place of "Don't ask again" (which doesn't cover a file: that is asked about every time). Same in viewer.js.
+// The box is ticked or not as it was left the last time (deleteFileRemembered, from shared/images.js).
+async function offerFileDeletion(files) {
+  document.getElementById('deleteFileRow').hidden = files.length === 0;
+  document.getElementById('dontAskRow').hidden = files.length > 0;
+  document.getElementById('deleteFile').checked = files.length > 0 && await deleteFileRemembered();
+  document.getElementById('deleteFileText').textContent = files.length > 0 ? fileDeletionText(files) : '';
+}
+
+// The box's text for the files a result was downloaded as, by name (same function in content.js)
+document.getElementById('deleteFile')?.addEventListener('change', event => rememberDeleteFile(event.target.checked));
+
+function fileDeletionText(files) {
+  const names = files.map(file => file.path.split(/[\\/]/).pop()).join(', ');
+  return `Also delete the ${files.length === 1 ? 'file' : 'files'} it was downloaded as: ${names}`;
+}
+
+// The files a cached result was downloaded as, still there to delete: [{ id, path }] (background.js keeps the
+// browser's download ids with each downloaded result)
+async function downloadedFilesOf(hash) {
+  const response = await chrome.runtime.sendMessage({ action: 'downloadedFiles', hash });
+  return (response?.success && response.files) || [];
+}
+
+// Delete the image shown from the cache (and the file it was downloaded as, if the box is ticked); the next one
+// takes its place
+let askingToDelete = false;
 async function deleteCurrent() {
   const entry = entries[index];
-  if (!entry || confirmDelete.open || !(await deleteConfirmed())) return;
-  const response = await chrome.runtime.sendMessage({ action: 'deleteFromCache', hash: entry.hash });
+  if (!entry || askingToDelete || confirmDelete.open) return;
+  askingToDelete = true;
+  clearTimeout(timer);
+  let answer;
+  try {
+    answer = await deleteConfirmed(await downloadedFilesOf(entry.hash));
+  } finally {
+    askingToDelete = false;
+  }
+  if (!answer) return;
+  const response = await chrome.runtime.sendMessage({ action: 'deleteFromCache', hash: entry.hash, deleteFiles: answer.deleteFiles });
   if (!response?.success) {
     alert(`Couldn't delete it: ${response?.error || 'no answer'}`);
     return;
+  }
+  if (response.fileError) {
+    alert(`The downloaded file couldn't be deleted: ${response.fileError}`);
   }
   entries.splice(entries.indexOf(entry), 1);
   loaded.delete(entry.hash);
@@ -243,6 +360,38 @@ async function deleteCurrent() {
   show(Math.min(index, entries.length - 1));
 }
 elements.delete.addEventListener('click', deleteCurrent);
+
+// Purge: every image out of the cache, as the settings page's button does. It always asks, with the count, and
+// Auto waits while the question is open. Once done, the page shows what the empty cache shows.
+const confirmPurge = document.getElementById('confirmPurge');
+async function purgeCache() {
+  if (!entries.length || confirmDelete.open || confirmPurge.open) return;
+  clearTimeout(timer);
+  document.getElementById('confirmPurgeText').textContent = entries.length === 1
+    ? 'Delete the only image from the cache?'
+    : `Delete all ${entries.length} images from the cache?`;
+  confirmPurge.returnValue = '';
+  confirmPurge.showModal();
+  await new Promise(resolve => confirmPurge.addEventListener('close', resolve, { once: true }));
+  if (confirmPurge.returnValue !== 'delete') {
+    schedule();
+    return;
+  }
+  elements.purge.disabled = true;
+  const response = await chrome.runtime.sendMessage({ action: 'clearCache' }).catch(error => ({ error: error.message }));
+  elements.purge.disabled = false;
+  if (!response?.success) {
+    alert(`Couldn't purge the cache: ${response?.error || 'no answer'}`);
+    schedule();
+    return;
+  }
+  entries = [];
+  loaded.clear();
+  thumbs.clear();
+  elements.strip.replaceChildren();
+  showEmpty(`Cache purged (${response.count} image${response.count === 1 ? '' : 's'}). Images you process from now on are kept here.`);
+}
+elements.purge.addEventListener('click', purgeCache);
 
 function toggleFullscreen() {
   if (document.fullscreenElement) {
@@ -284,7 +433,7 @@ elements.interval.addEventListener('change', () => {
   schedule();
 });
 document.addEventListener('keydown', event => {
-  if (!entries.length || confirmDelete.open || event.target.tagName === 'SELECT' || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!entries.length || confirmDelete.open || confirmPurge.open || event.target.tagName === 'SELECT' || event.ctrlKey || event.metaKey || event.altKey) return;
   if (event.key === 'ArrowLeft') show(index - 1);
   else if (event.key === 'ArrowRight') show(index + 1);
   else if (event.key === ' ') setMode(!auto);

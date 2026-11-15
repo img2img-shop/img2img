@@ -7,30 +7,70 @@
 // ticked from one read below, so none of them flicks over while the page is already up.
 const switches = [];
 
-function toggle(id, key, { onByDefault = false } = {}) {
+function toggle(id, key, { onByDefault = false, confirmOn } = {}) {
   const input = document.getElementById(id);
   const state = value => (typeof value === 'boolean' ? value : onByDefault);
-  input.addEventListener('change', () => chrome.storage.local.set({ [key]: input.checked }));
+  input.addEventListener('change', async () => {
+    // A switch that asks before going on: a no leaves it off, and the setting as it was
+    if (input.checked && confirmOn && !(await confirmOn())) {
+      input.checked = false;
+      return;
+    }
+    chrome.storage.local.set({ [key]: input.checked });
+  });
   switches.push({ input, key, state });
+}
+
+// Keep Workflow in Results and Download as JPG pull against each other: a JPG can't carry a workflow, so while both
+// are on, results of the user's own workflows download as PNG. Turning either on with the other on says so first.
+// (The popup's Download as JPG switch asks the same way.)
+const isOn = (key, onByDefault = false) => new Promise(resolve => {
+  chrome.storage.local.get(key, stored => resolve(typeof stored[key] === 'boolean' ? stored[key] : onByDefault));
+});
+async function confirmKeepWorkflow() {
+  return !await isOn('downloadAsJpg', true) || confirm('Download as JPG is on. Results of your own workflows will download as PNG instead, since a JPG can\'t carry the workflow; everything else still downloads as JPG.\n\nKeep the workflow in them?');
+}
+async function confirmDownloadAsJpg() {
+  return !await isOn('keepWorkflowInResult') || confirm('Keep Workflow in Results is on. Results of your own workflows will keep downloading as PNG, since a JPG can\'t carry the workflow; everything else will download as JPG.\n\nTurn Download as JPG on?');
 }
 
 // The three the popup repeats
 toggle('openInNewTabToggle', 'openResultsInNewTab');
 toggle('autoDownloadToggle', 'autoDownload');
-toggle('downloadAsJpgToggle', 'downloadAsJpg', { onByDefault: true });
+toggle('downloadAsJpgToggle', 'downloadAsJpg', { onByDefault: true, confirmOn: confirmDownloadAsJpg });
+// Whether a My workflows result keeps the graph ComfyUI wrote into it (content.js, background.js)
+toggle('keepWorkflowToggle', 'keepWorkflowInResult', { confirmOn: confirmKeepWorkflow });
+// Whether a download button saves the original image along with the result (the download buttons, background.js)
+toggle('downloadOriginalToggle', 'downloadOriginal');
 // The icons over a converted image (content.js) and in a result tab (viewer.js): always there, or on hover
 toggle('iconsOnHoverToggle', 'resultIconsOnHover');
 toggle('cacheClearOnStartupToggle', 'cacheClearOnStartup');
-// Announcements: background.js asks the site once a day, and removes anything stored when this is turned off
+// Announcements: background.js asks the site once a day and as the popup opens, and removes anything stored when this is turned off
 toggle('announcementsToggle', 'announcementsEnabled', { onByDefault: true });
 toggle('devAutoReloadToggle', 'devAutoReload');
 
-// The popup has some of the same switches: follow it while both are open
+// The popup has some of the same switches: follow it while both are open. The site rules follow the My workflows
+// page the same way (deleting a workflow there drops the rules that ran it, and renames show), but not this page's
+// own saves, so a rule being typed in keeps its box.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   for (const { input, key, state } of switches) {
     if (key in changes) input.checked = state(changes[key].newValue);
   }
+  let rulesChanged = false;
+  if (changes.customWorkflows) {
+    customWorkflowNames = (changes.customWorkflows.newValue || []).map(({ id, name }) => ({ id, name: name || id }));
+    rulesChanged = true;
+  }
+  if (changes.siteWorkflows) {
+    const own = JSON.stringify(siteWorkflows.filter(rule => rule.site.trim() && rule.workflow));
+    if (JSON.stringify(changes.siteWorkflows.newValue || []) !== own) {
+      siteWorkflows = (Array.isArray(changes.siteWorkflows.newValue) ? changes.siteWorkflows.newValue : [])
+        .map(({ site, workflow }) => ({ site: String(site || ''), workflow: String(workflow || '') }));
+      rulesChanged = true;
+    }
+  }
+  if (rulesChanged) renderSiteWorkflows();
 });
 
 // A dropdown of numbers bound to a key. afterChange, where it's given, reports what the change did.
@@ -117,15 +157,17 @@ downloadFolder.addEventListener('blur', () => {
 
 // "File Name": the pattern content.js fills in for each result (resultBaseName). The tokens are the pieces it knows;
 // -img2img and the extension are always added, so a result is recognisable as one.
-const FILENAME_TOKENS = ['{title}', '{workflow}', '{source}', '{host}', '{date}', '{time}'];
+const FILENAME_TOKENS = ['{title}', '{workflow}', '{source}', '{host}', '{url}', '{date}', '{time}', '{id}'];
 const DEFAULT_FILENAME_PATTERN = '{title}-{workflow}-{source}';
 const FILENAME_EXAMPLE = {
   '{title}': 'Mountain hares in winter',
   '{workflow}': 'Upscale',
-  '{source}': 'Bella',
+  '{source}': 'Source1',
   '{host}': 'example.com',
+  '{url}': 'example.com_photos',
   '{date}': '2026-11-08',
   '{time}': '14-05',
+  '{id}': 'k3f9x2ab',
 };
 
 const filenamePattern = document.getElementById('filenamePattern');

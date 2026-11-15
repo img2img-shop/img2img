@@ -1,0 +1,106 @@
+/* What the extension's full-page views share, so a change to the look is made once: the colours (light, and dark
+   under data-theme="dark", which shared/theme.js sets), and the dialog that asks before something is deleted or
+   started. Each page's own layout stays in the page.
+
+   Used by: the result tab (viewer.html), the cache page (cache.html), the Library (library.html). */
+
+:root {
+  color-scheme: light;
+  --bg: #f2f2f3;
+  --text: #3a3a3a;
+  --strong: #111;
+  --muted: #6b6b6b;
+  --panel: #ffffff;
+  --strip: #f8f8f9;
+  --border: #dcdcdf;
+  --control-border: #c8c8cc;
+  --thumb: #e4e4e7;
+  --nav-bg: rgba(0, 0, 0, 0.08);
+  --nav-fg: #333;
+  --link: #1a5fd0;
+  --scroll: #c4c4c8;
+  --scroll-hover: #a0a0a6;
+  --checker-a: #e4e4e7;
+  --checker-b: #f4f4f5;
+  --hover: rgba(0, 0, 0, 0.06);
+  --sel: rgba(52, 113, 219, 0.16);
+  --sel-border: #3471db;
+  --green: #16a34a;
+  --red: #c62828;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e0e0e;
+  --text: #ccc;
+  --strong: #fff;
+  --muted: #999;
+  --panel: #171717;
+  --strip: #121212;
+  --border: #262626;
+  --control-border: #404040;
+  --thumb: #262626;
+  --nav-bg: rgba(255, 255, 255, 0.15);
+  --nav-fg: #fff;
+  --link: #8ab4f8;
+  --scroll: #3a3a3a;
+  --scroll-hover: #555;
+  --checker-a: #262626;
+  --checker-b: #1c1c1c;
+  --hover: rgba(255, 255, 255, 0.08);
+  --sel: rgba(90, 150, 255, 0.22);
+  --sel-border: #6ea0ff;
+}
+
+/* (a class's display rule must not bring back what the hidden attribute put away) */
+[hidden] {
+  display: none !important;
+}
+
+/* A question before something happens: delete this result, purge the cache, start a run of many */
+dialog {
+  padding: 20px 22px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+dialog p {
+  margin: 0 0 14px;
+  color: var(--strong);
+}
+dialog label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+dialog .buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+dialog button {
+  padding: 7px 16px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+dialog button[value="delete"] {
+  border-color: #c62828;
+  background: #c62828;
+  color: #fff;
+}
+dialog button[value="delete"]:hover {
+  background: #b71c1c;
+}

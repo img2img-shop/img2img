@@ -19,12 +19,16 @@ import { PATTERNS_FILE, findPrivate, loadPrivatePatterns } from './private-check
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE = 'extension';
+// The licence goes in the packages: a .crx or an .xpi is a ZIP anyone can open, so the terms belong beside the
+// code rather than only on a website. It is the same file the repository publishes. Both paths it is known by
+// are tried, and the build stops if the commit has neither.
+const LICENCE = ['public-repo/LICENSE', 'LICENSE'];
 const WEB_EXT = 'web-ext@10.8.0';
 
 // Firefox's add-on ID is permanent once the add-on is listed on addons.mozilla.org
 const GECKO_ID = 'img2img@img2img.shop';
 // data_collection_permissions (required for new listings) needs Firefox 140, or 142 on Android. Page images go to
-// the img2img server (server processing), with the account's API key. The daily announcement check (background.js)
+// the img2img server (server processing), with the account's API key. The announcement check (background.js)
 // is technicalAndInteraction, which Mozilla only allows as optional: Firefox then offers it as an opt-out when the
 // add-on is installed, and background.js honours that answer as well as the popup's Announcements setting.
 const FIREFOX_SETTINGS = {
@@ -55,6 +59,17 @@ const TARGETS = {
   }),
 };
 
+// Each target's scripts. A line for an API only Chromium has ends in "// chromium-only" and is left out of the
+// Firefox package, where a line starting "// firefox: " takes its place, so the package doesn't refer to an API
+// Firefox doesn't have.
+const SCRIPTS_FOR = {
+  chromium: text => text,
+  firefox: text => text.split('\n')
+    .filter(line => !/\/\/ chromium-only\s*$/.test(line))
+    .map(line => line.replace(/^(\s*)\/\/ firefox: /, '$1'))
+    .join('\n'),
+};
+
 const args = process.argv.slice(2);
 const lint = !args.includes('--no-lint');
 const force = args.includes('--force');
@@ -70,6 +85,18 @@ if (git('status', '--porcelain', '--', SOURCE).trim()) {
 
 const files = git('ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', SOURCE).split('\0').filter(Boolean)
   .map(file => ({ name: path.posix.relative(SOURCE, file), content: execFileSync('git', ['show', `HEAD:${file}`], { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }) }));
+
+// Added before the private check, so the licence is read for private details along with everything else that
+// goes in a package. From the last commit, like the rest of it.
+const licence = LICENCE.find(file => {
+  try { git('cat-file', '-e', `HEAD:${file}`); return true; } catch { return false; }
+});
+if (!licence) {
+  console.error(`Not built: no licence in the commit (looked for ${LICENCE.join(' and ')})`);
+  process.exit(1);
+}
+files.push({ name: 'LICENSE', content: execFileSync('git', ['show', `HEAD:${licence}`], { cwd: REPO, maxBuffer: 1024 * 1024 }) });
+
 const manifest = JSON.parse(files.find(file => file.name === 'manifest.json').content);
 const version = manifest.version;
 
@@ -95,9 +122,13 @@ fs.mkdirSync(outDir, { recursive: true });
 
 const packages = {};
 for (const [target, transform] of Object.entries(TARGETS)) {
-  const targetFiles = files.map(file => file.name === 'manifest.json'
-    ? { name: file.name, content: Buffer.from(JSON.stringify(transform(manifest), null, 2) + '\n') }
-    : file);
+  const targetFiles = files.map(file => {
+    if (file.name === 'manifest.json') return { name: file.name, content: Buffer.from(JSON.stringify(transform(manifest), null, 2) + '\n') };
+    if (!file.name.endsWith('.js')) return file;
+    const text = file.content.toString('utf8');
+    const script = SCRIPTS_FOR[target](text);
+    return script === text ? file : { name: file.name, content: Buffer.from(script, 'utf8') };
+  });
   const zipName = `img2img-${target}-${version}.zip`;
   // (an identical package is left alone: a browser may have it open, e.g. loaded as a temporary add-on)
   const zipPath = path.join(outDir, zipName);

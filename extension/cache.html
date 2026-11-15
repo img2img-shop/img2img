@@ -4,45 +4,8 @@
   <meta charset="utf-8">
   <title>Cached images - img2img</title>
   <script src="shared/theme.js"></script>
+  <link rel="stylesheet" href="shared/pages.css">
   <style>
-    :root {
-      color-scheme: light;
-      --bg: #f2f2f3;
-      --text: #3a3a3a;
-      --strong: #111;
-      --muted: #6b6b6b;
-      --panel: #ffffff;
-      --strip: #f8f8f9;
-      --border: #dcdcdf;
-      --control-border: #c8c8cc;
-      --thumb: #e4e4e7;
-      --nav-bg: rgba(0, 0, 0, 0.08);
-      --nav-fg: #333;
-      --link: #1a5fd0;
-      --scroll: #c4c4c8;
-      --scroll-hover: #a0a0a6;
-      --checker-a: #e4e4e7;
-      --checker-b: #f4f4f5;
-    }
-    :root[data-theme="dark"] {
-      color-scheme: dark;
-      --bg: #0e0e0e;
-      --text: #ccc;
-      --strong: #fff;
-      --muted: #999;
-      --panel: #171717;
-      --strip: #121212;
-      --border: #262626;
-      --control-border: #404040;
-      --thumb: #262626;
-      --nav-bg: rgba(255, 255, 255, 0.15);
-      --nav-fg: #fff;
-      --link: #8ab4f8;
-      --scroll: #3a3a3a;
-      --scroll-hover: #555;
-      --checker-a: #262626;
-      --checker-b: #1c1c1c;
-    }
     html, body {
       margin: 0;
       height: 100%;
@@ -240,6 +203,31 @@
       height: 32px;
       border-radius: 6px;
     }
+    .text-button {
+      padding: 6px 12px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .text-button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #downloadAll:hover:not(:disabled),
+    #downloadAll.busy {
+      border-color: #16a34a;
+      color: #16a34a;
+      font-variant-numeric: tabular-nums;
+    }
+    /* Purge: the whole cache, so it reads as a warning on hover */
+    #purge:hover:not(:disabled) {
+      border-color: #c62828;
+      color: #c62828;
+    }
     /* Full screen is for the image: it fills the screen (as large as fits, keeping its shape), without the logo and
        thumbnails. The bar and the arrows float over it and fade out while the mouse rests. */
     :root:fullscreen #strip,
@@ -276,60 +264,11 @@
     :root:fullscreen.idle {
       cursor: none;
     }
-    /* Asks before deleting, unless "Don't ask again" was ticked */
-    #confirmDelete {
-      padding: 20px 22px 16px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel);
-      color: var(--text);
-      font-size: 14px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    }
-    #confirmDelete::backdrop {
-      background: rgba(0, 0, 0, 0.45);
-    }
-    #confirmDelete p {
-      margin: 0 0 14px;
-      color: var(--strong);
-    }
-    #confirmDelete label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    #confirmDelete .buttons {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      margin-top: 18px;
-    }
-    #confirmDelete button {
-      padding: 7px 16px;
-      border: 1px solid var(--control-border);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      cursor: pointer;
-    }
-    #confirmDelete button[value="delete"] {
-      border-color: #c62828;
-      background: #c62828;
-      color: #fff;
-    }
-    #confirmDelete button[value="delete"]:hover {
-      background: #b71c1c;
-    }
+    /* (the dialogs that ask before deleting and before purging are styled in shared/pages.css) */
     #message {
       font-size: 15px;
       text-align: center;
       line-height: 1.5;
-    }
-    [hidden] {
-      display: none !important;
     }
   </style>
 </head>
@@ -369,6 +308,8 @@
       <option value="10">10 s</option>
       <option value="30">30 s</option>
     </select>
+    <button id="downloadAll" class="text-button" title="Download every image in the cache">Download all</button>
+    <button id="purge" class="text-button" title="Delete every image from the cache">Purge</button>
     <span id="themeSlot"></span>
     <button id="fullscreen" class="round" title="Full screen (F)">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path id="fullscreenIcon" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
@@ -377,13 +318,24 @@
   <dialog id="confirmDelete">
     <form method="dialog">
       <p>Delete this image from the cache?</p>
-      <label><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
+      <label id="deleteFileRow" hidden><input type="checkbox" id="deleteFile"> <span id="deleteFileText"></span></label>
+      <label id="dontAskRow"><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
       <div class="buttons">
         <button value="cancel">Cancel</button>
         <button value="delete" autofocus>Delete</button>
       </div>
     </form>
   </dialog>
+  <dialog id="confirmPurge">
+    <form method="dialog">
+      <p id="confirmPurgeText">Delete every image from the cache?</p>
+      <div class="buttons">
+        <button value="cancel" autofocus>Cancel</button>
+        <button value="delete">Delete all</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="shared/images.js"></script>
   <script src="cache.js"></script>
 </body>
 </html>

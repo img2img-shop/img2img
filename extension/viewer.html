@@ -4,45 +4,8 @@
   <meta charset="utf-8">
   <title>img2img result</title>
   <script src="shared/theme.js"></script>
+  <link rel="stylesheet" href="shared/pages.css">
   <style>
-    :root {
-      color-scheme: light;
-      --bg: #f2f2f3;
-      --text: #3a3a3a;
-      --strong: #111;
-      --muted: #6b6b6b;
-      --panel: #ffffff;
-      --strip: #f8f8f9;
-      --border: #dcdcdf;
-      --control-border: #c8c8cc;
-      --thumb: #e4e4e7;
-      --nav-bg: rgba(0, 0, 0, 0.08);
-      --nav-fg: #333;
-      --link: #1a5fd0;
-      --scroll: #c4c4c8;
-      --scroll-hover: #a0a0a6;
-      --checker-a: #e4e4e7;
-      --checker-b: #f4f4f5;
-    }
-    :root[data-theme="dark"] {
-      color-scheme: dark;
-      --bg: #0e0e0e;
-      --text: #ccc;
-      --strong: #fff;
-      --muted: #999;
-      --panel: #171717;
-      --strip: #121212;
-      --border: #262626;
-      --control-border: #404040;
-      --thumb: #262626;
-      --nav-bg: rgba(255, 255, 255, 0.15);
-      --nav-fg: #fff;
-      --link: #8ab4f8;
-      --scroll: #3a3a3a;
-      --scroll-hover: #555;
-      --checker-a: #262626;
-      --checker-b: #1c1c1c;
-    }
     html, body {
       margin: 0;
       height: 100%;
@@ -52,8 +15,11 @@
     }
     body {
       display: flex;
-      align-items: center;
-      justify-content: center;
+    }
+    /* Centred by their margins, so an image zoomed past the window can be scrolled to its top and left edges */
+    #frame,
+    #message {
+      margin: auto;
     }
     /* The buttons sit on the image's top-right corner, like the on-page ones (the window can be much wider
        than a portrait image): download, with the original/result toggle, compare and delete under it */
@@ -61,9 +27,12 @@
       position: relative;
       line-height: 0;
     }
+    /* Fitted to the window at the browser's usual zoom, and growing with it from there: the window measures
+       fewer CSS pixels the further in it's zoomed, so --zoom (set in viewer.js) makes up for it. Without it
+       zooming in would leave the image the size it was. */
     img {
-      max-width: 100vw;
-      max-height: 100vh;
+      max-width: calc(100vw * var(--zoom, 1));
+      max-height: calc(100vh * var(--zoom, 1));
       object-fit: contain;
     }
     #frame button {
@@ -81,6 +50,12 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      /* (over a comparison laid on the image, which content.js puts just under its own buttons) */
+      z-index: 2147483647;
+    }
+    /* Side by side, a comparison has the whole window, with what it needs in its own bar */
+    #frame:has(img[data-img2img-comparing="window"]) button {
+      display: none;
     }
     /* The icons come from content.js, so they're sized here rather than in their markup */
     #frame button svg {
@@ -91,7 +66,8 @@
     #download { top: 12px; }
     #revert { top: 58px; }
     #compare { top: 104px; }
-    #delete { top: 150px; }
+    #reprocess { top: 150px; }
+    #delete { top: 196px; }
     #frame.no-original #delete { top: 58px; }
     /* Dark mode, shared with the popup and the other extension pages */
     .theme-toggle {
@@ -140,56 +116,7 @@
       text-align: center;
       line-height: 1.5;
     }
-    /* Asks before deleting, unless "Don't ask again" was ticked (here or on the cache page) */
-    #confirmDelete {
-      padding: 20px 22px 16px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel);
-      color: var(--text);
-      font-size: 14px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    }
-    #confirmDelete::backdrop {
-      background: rgba(0, 0, 0, 0.45);
-    }
-    #confirmDelete p {
-      margin: 0 0 14px;
-      color: var(--strong);
-    }
-    #confirmDelete label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    #confirmDelete .buttons {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      margin-top: 18px;
-    }
-    #confirmDelete button {
-      padding: 7px 16px;
-      border: 1px solid var(--control-border);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      cursor: pointer;
-    }
-    #confirmDelete button[value="delete"] {
-      border-color: #c62828;
-      background: #c62828;
-      color: #fff;
-    }
-    #confirmDelete button[value="delete"]:hover {
-      background: #b71c1c;
-    }
-    [hidden] {
-      display: none !important;
-    }
+    /* (the dialog that asks before deleting is styled in shared/pages.css) */
   </style>
 </head>
 <body>
@@ -197,10 +124,12 @@
     <button id="download" title="Download processed image" hidden>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
     </button>
-    <!-- The toggle between the original image and the result, and the side-by-side comparison, as on the page
+    <!-- The toggle between the original image and the result, and the comparison laid over it, as on the page
          (their icons are set in viewer.js, from content.js's) -->
     <button id="revert" hidden></button>
-    <button id="compare" title="Compare with the original, side by side" hidden></button>
+    <button id="compare" title="Compare with the original" hidden></button>
+    <!-- Processing the original again (reprocessImage, from content.js) -->
+    <button id="reprocess" title="Process again" hidden></button>
     <button id="delete" title="Delete from the cache (Delete key)" hidden>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
     </button>
@@ -210,7 +139,8 @@
   <dialog id="confirmDelete">
     <form method="dialog">
       <p>Delete this image from the cache?</p>
-      <label><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
+      <label id="deleteFileRow" hidden><input type="checkbox" id="deleteFile"> <span id="deleteFileText"></span></label>
+      <label id="dontAskRow"><input type="checkbox" id="dontAskDelete"> Don't ask again</label>
       <div class="buttons">
         <button value="cancel">Cancel</button>
         <button value="delete" autofocus>Delete</button>

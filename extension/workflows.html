@@ -64,6 +64,9 @@
       background: #ffebee;
       color: #b71c1c;
     }
+    .notice p {
+      margin: 0 0 6px;
+    }
     .notice ul {
       margin: 6px 0 0;
       padding-left: 18px;
@@ -188,11 +191,48 @@
       background: #fafafa;
       color: #aaa;
     }
+    /* How a text setting shows in the popup, and under the row the words its dropdown or slider offers */
+    .setting-row .setting-style {
+      padding: 5px 4px;
+      font-size: 12px;
+    }
+    .setting-words {
+      grid-column: 2 / -1;
+    }
+    .setting-words > .muted {
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    /* One choice: its label, the text it puts in, and a button to remove it */
+    .choice-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr) auto;
+      align-items: start;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .choice-value {
+      width: 100%;
+      min-height: 29px;
+      padding: 5px 7px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font: 13px Arial, sans-serif;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+    .choice-row .choice-remove {
+      padding: 4px 9px;
+    }
+    .setting-style:disabled, .choice-value:disabled {
+      background: #fafafa;
+      color: #aaa;
+    }
     @media (max-width: 640px) {
       .setting-row {
         grid-template-columns: 24px 1fr;
       }
-      .setting-row .setting-value, .setting-row input[type="text"], .setting-row .setting-range {
+      .setting-row .setting-value, .setting-row input[type="text"], .setting-row .setting-range, .setting-row .setting-style, .setting-words {
         grid-column: 2;
       }
     }
@@ -274,6 +314,7 @@
     .chip.source { background: #7b1fa2; }
     .chip.result { background: #1565c0; }
     .chip.setting { background: #ef6c00; }
+    .chip.switch { background: #00796b; }
     .roles {
       display: flex;
       flex-wrap: wrap;
@@ -314,6 +355,16 @@
     .node-panel .source-options input[type="text"] {
       max-width: 300px;
     }
+    .node-panel .switch-options {
+      margin-bottom: 6px;
+    }
+    .node-panel .switch-options input[type="text"] {
+      max-width: 300px;
+      margin: 2px 0 4px 24px;
+    }
+    .node-panel .switch-mode {
+      margin-left: 24px;
+    }
     .setting-group-title {
       cursor: pointer;
     }
@@ -351,8 +402,31 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .order-row .order-label {
+      cursor: pointer;
+    }
+    /* Rows are dragged into place; the line shows where the one being dragged would land */
+    .order-row {
+      cursor: grab;
+    }
+    .order-row.dragging {
+      opacity: 0.45;
+    }
+    .order-row.drop-before {
+      box-shadow: 0 -3px 0 -1px #1976D2;
+    }
+    .order-row.drop-after {
+      box-shadow: 0 3px 0 -1px #1976D2;
+    }
+    .order-row .order-label:hover {
+      color: #1976D2;
+    }
     .order-row button {
       padding: 2px 9px;
+    }
+    /* The setting just clicked in the order list */
+    .setting-row.shown {
+      background: rgba(25, 118, 210, 0.1);
     }
     /* Dark mode (shared/theme.js sets data-theme; the setting is shared with the popup and the other extension pages).
        The graph is dark in both. */
@@ -424,18 +498,22 @@
     }
     :root[data-theme="dark"] input[type="text"],
     :root[data-theme="dark"] .range-box,
+    :root[data-theme="dark"] .choice-value,
     :root[data-theme="dark"] select {
       background: #262628;
       color: #e3e3e3;
       border-color: #444448;
     }
     :root[data-theme="dark"] .setting-row input[type="text"]:disabled,
+    :root[data-theme="dark"] .setting-style:disabled,
+    :root[data-theme="dark"] .choice-value:disabled,
     :root[data-theme="dark"] .range-box:disabled {
       background: #1e1e20;
       color: #6f6f6f;
     }
     :root[data-theme="dark"] .roles button,
     :root[data-theme="dark"] button.link-like,
+    :root[data-theme="dark"] .order-row .order-label:hover,
     :root[data-theme="dark"] .setting-group-title:hover {
       color: #64b5f6;
     }
@@ -490,9 +568,14 @@
 
       <label class="field" for="workflowName">Name (shown in the popup)</label>
       <input type="text" id="workflowName" maxlength="60">
+      <div id="setupFrom" hidden>
+        <label class="field" for="setupFromSelect">Set it up like</label>
+        <select id="setupFromSelect"></select>
+        <p class="muted" style="margin: 4px 0 0;">Another workflow's page image, sources, result and popup settings come over with their values, wherever this workflow has the same nodes.</p>
+      </div>
 
       <h3>The workflow</h3>
-      <p class="muted" style="margin: 0 0 8px;">Click a node to choose what it does: which Load Image node gets the image from the page, which ones get a source picked in the popup, and which node gives the result. Drag to move around, scroll to zoom, double-click a subgraph to open it.</p>
+      <p class="muted" style="margin: 0 0 8px;">Click a node to choose what it does: which Load Image node gets the image from the page, which ones get a source picked in the popup, and which node gives the result. Any other node can get an on/off switch in the popup: switched off, the workflow runs without it. Drag to move around, scroll to zoom, double-click a subgraph to open it.</p>
       <div id="roles" class="roles"></div>
       <div class="graph-wrap">
         <svg id="graph" tabindex="0" aria-label="The workflow's nodes"><g id="viewport"></g></svg>
@@ -505,15 +588,16 @@
           </div>
         </div>
         <div class="legend">
-          <span class="chip page">Page image</span><span class="chip source">Source</span><span class="chip result">Result</span><span class="chip setting">Has popup settings</span>
+          <span class="chip page">Page image</span><span class="chip source">Source</span><span class="chip result">Result</span><span class="chip setting">Has popup settings</span><span class="chip switch">On/off switch in the popup</span>
         </div>
       </div>
       <div id="nodePanel" class="node-panel"></div>
 
       <h3>Settings in the popup</h3>
-      <p class="muted" style="margin: 0 0 8px;">Tick the inputs you want to change from the popup and give them a name. Everything else keeps the value it has in the workflow. A number's range is the node's own unless you narrow it: the popup's slider then covers only the part that's worth having, like -3 to 3 for a LoRA strength the node allows from -10 to 10.</p>
+      <p class="muted" style="margin: 0 0 8px;">Tick the inputs you want to change from the popup and give them a name. Everything else keeps the value it has in the workflow. A number's range is the node's own unless you narrow it: the popup's slider then covers only the part that's worth having, like -3 to 3 for a LoRA strength the node allows from -10 to 10. A text input can be a dropdown or a slider over choices of your own in place of a text box: a colour to pick from red, blue and green, or a size that slides from small to massive. Each choice has a label for the popup and the text it puts in, so a short label can stand for a long piece of text. The popup always offers None as well, which leaves the input empty.</p>
       <div id="orderPanel" hidden>
         <h3>Order in the popup</h3>
+        <p class="muted" style="margin: 0 0 8px;">Drag a setting to where you want it, or use its arrows.</p>
         <div id="orderList"></div>
       </div>
       <input type="text" id="settingsFilter" class="filter" placeholder="Filter by node or input name">

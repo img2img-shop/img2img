@@ -1,3 +1,31 @@
+// Messages answered here, and who sends them (kept by the used-by check, which fails when this is out of date):
+//   apiRequest: the Library, the popup
+//   clearCache: the cache page, the settings page
+//   clearQueue: the popup
+//   comfyRequest: web pages, the result tab, the Library, the popup, My workflows
+//   deleteFromCache: web pages, the result tab, the Library, the cache page
+//   deleteSource: the popup
+//   downloadImage: web pages, the result tab, the Library, the cache page
+//   downloadOriginal: web pages, the result tab, the cache page
+//   downloadPicture: web pages
+//   downloadableImage: the Library
+//   downloadedFiles: web pages, the result tab, the Library, the cache page
+//   fetchImage: web pages, the result tab, the Library
+//   getAllSources: the popup
+//   getFromCache: web pages, the result tab, the Library, the cache page
+//   getOriginalImage: the result tab
+//   getSource: web pages, the result tab, the Library, the popup
+//   listCache: the Library, the cache page
+//   listResults: web pages, the result tab
+//   openResultTab: web pages, the result tab
+//   pictureUnderPointer: web pages
+//   purgeExpired: the settings page
+//   queueStatus: the popup
+//   refreshAnnouncements: the popup
+//   saveSource: the popup
+//   setCacheThumbnail: the cache page
+//   trimCache: the settings page
+
 // The shared workflow code (names the right-click menu's item after the chosen workflow). Chrome runs this file as
 // a service worker, Firefox as an event page, which loads the same scripts from the manifest instead (see
 // tools/build-release.mjs) and has no importScripts.
@@ -87,10 +115,14 @@ chrome.storage.onChanged.addListener(changes => {
 });
 
 // Announcements shown at the top of the popup: a new feature, or something wrong with the service. img2img.shop is
-// asked once a day with one GET that carries nothing at all — no account, no settings, not even which version this is
-// — so each announcement says which versions and browsers it's meant for (announcementApplies) and the choice is made
-// here. The site counts those requests the same cookie-free way it counts page views, which is the only way to tell
-// how many people use the extension: everyone processing on their own ComfyUI never reaches it otherwise.
+// asked with one GET that carries nothing at all — no account, no settings, not even which version this is — so each
+// announcement says which versions and browsers it's meant for (announcementApplies) and the choice is made here.
+// It's asked once a day in the background, and again when the popup opens if the last answer is more than a few
+// minutes old, so that a notice about today (the service down this evening) is seen while it still matters. When a
+// hosted job fails because the server can't be reached, the page's error carries the current warning too
+// (outageNotice). The site counts those requests the same cookie-free way it counts page views, once a day per
+// visitor however often they come, which is the only way to tell how many people use the extension: everyone
+// processing on their own ComfyUI never reaches it otherwise.
 // The Announcements setting (on the settings page) turns all of it off, and Firefox's own data-collection consent is respected
 // where the browser offers it. Nothing fetched is ever run: the popup draws the text as text (showAnnouncements in
 // popup.js), and only ordinary web links are kept.
@@ -98,6 +130,7 @@ const ANNOUNCEMENTS_URL = 'https://img2img.shop/announcements.json';
 const ANNOUNCEMENTS_ALARM = 'img2img-announcements';
 const ANNOUNCEMENTS_EVERY_MINUTES = 24 * 60;
 const ANNOUNCEMENTS_AGAIN_AFTER_MS = 20 * 60 * 60 * 1000; // a browser restart shouldn't mean another check
+const ANNOUNCEMENTS_FRESH_MS = 15 * 60 * 1000; // what the popup and a failed job settle for
 const ANNOUNCEMENTS_AT_MOST = 5;
 const ANNOUNCEMENT_LEVELS = ['info', 'warning', 'critical'];
 
@@ -135,12 +168,30 @@ async function announcementsAllowed() {
   return true;
 }
 
-async function checkAnnouncements() {
+// The popup asks as it opens: the answer comes into storage, which the popup is watching
+chrome.runtime.onMessage.addListener(request => {
+  if (request.action === 'refreshAnnouncements') {
+    checkAnnouncements(ANNOUNCEMENTS_FRESH_MS);
+  }
+  return false;
+});
+
+// One check at a time: the popup opening as the alarm goes off needs only one answer
+let checkingAnnouncements = null;
+
+function checkAnnouncements(againAfterMs = ANNOUNCEMENTS_AGAIN_AFTER_MS) {
+  checkingAnnouncements ??= fetchAnnouncements(againAfterMs).finally(() => {
+    checkingAnnouncements = null;
+  });
+  return checkingAnnouncements;
+}
+
+async function fetchAnnouncements(againAfterMs) {
   if (!await announcementsAllowed()) {
     return;
   }
   const { announcementsCheckedAt } = await chrome.storage.local.get('announcementsCheckedAt');
-  if (announcementsCheckedAt && Date.now() - Date.parse(announcementsCheckedAt) < ANNOUNCEMENTS_AGAIN_AFTER_MS) {
+  if (announcementsCheckedAt && Date.now() - Date.parse(announcementsCheckedAt) < againAfterMs) {
     return;
   }
   let items;
@@ -153,7 +204,7 @@ async function checkAnnouncements() {
     if (!response.ok) return;
     items = (await response.json())?.announcements;
   } catch {
-    return; // offline, or the site is unreachable: the next check is tomorrow
+    return; // offline, or the site is unreachable: asked again when the popup opens, or tomorrow
   }
   if (!Array.isArray(items)) {
     return;
@@ -163,9 +214,29 @@ async function checkAnnouncements() {
   const announcements = items
     .filter(item => item && typeof item === 'object' && announcementApplies(item, version, browser))
     .map(readAnnouncement)
-    .filter(Boolean)
+    .filter(item => item && !announcementEnded(item))
     .slice(0, ANNOUNCEMENTS_AT_MOST);
   await chrome.storage.local.set({ announcements, announcementsCheckedAt: new Date().toISOString() });
+}
+
+// An announcement with an end time ("down from 20:00 to 21:00") goes at that time, without waiting for a check
+function announcementEnded(item, now = Date.now()) {
+  return Boolean(item.endsAt) && Date.parse(item.endsAt) <= now;
+}
+
+// For a hosted job that failed because the server can't be reached: the warning that explains it, if there is one,
+// as a line for the page's error. Dismissing it in the popup doesn't keep it out of here: it says why this job failed.
+async function outageNotice() {
+  // (the error isn't held up long for it: with no answer soon, what's stored will do)
+  await Promise.race([checkAnnouncements(ANNOUNCEMENTS_FRESH_MS).catch(() => {}), new Promise(resolve => setTimeout(resolve, 4000))]);
+  const { announcements } = await chrome.storage.local.get('announcements');
+  const item = (Array.isArray(announcements) ? announcements : [])
+    .find(candidate => ['warning', 'critical'].includes(candidate.level) && !announcementEnded(candidate));
+  if (!item) {
+    return '';
+  }
+
+  return [item.title, item.body, item.url].filter(Boolean).join(' ');
 }
 
 // Only the fields the popup draws, as plain text within sensible lengths. One without an id or a title is dropped:
@@ -178,6 +249,7 @@ function readAnnouncement(item) {
     return null;
   }
   const url = text(item.url, 500);
+  const endsAt = text(item.endsAt, 40);
 
   return {
     id,
@@ -185,7 +257,8 @@ function readAnnouncement(item) {
     level: ANNOUNCEMENT_LEVELS.includes(item.level) ? item.level : 'info',
     body: text(item.body, 300),
     url: /^https:\/\//i.test(url) ? url : '', // an ordinary web link or none: never javascript: or data:
-    link: text(item.link, 60)
+    link: text(item.link, 60),
+    endsAt: Number.isNaN(Date.parse(endsAt)) ? '' : new Date(endsAt).toISOString()
   };
 }
 
@@ -293,23 +366,48 @@ chrome.action.setBadgeText({ text: '' });
 
 function countJob(change) {
   jobsRunning = Math.max(0, jobsRunning + change);
-  chrome.action.setBadgeText({ text: jobsRunning ? String(jobsRunning) : '' });
+  showJobCount();
 }
+
+// The Library page hands its files over a couple at a time and keeps the rest waiting in the page (each is read
+// whole to be sent, see library.js), so it says how many those are, on a port of its own: they count on the badge
+// and among the images the popup says are waiting, like the ones handed over. The port closing takes them off.
+const LIBRARY_PORT = 'img2img-library';
+const waitingInLibraries = new Map(); // port -> the files waiting in its page
+const waitingInPages = () => [...waitingInLibraries.values()].reduce((sum, count) => sum + count, 0);
+
+function showJobCount() {
+  const count = jobsRunning + waitingInPages();
+  chrome.action.setBadgeText({ text: count ? String(count) : '' });
+}
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== LIBRARY_PORT) return;
+  port.onMessage.addListener(({ waiting }) => {
+    waitingInLibraries.set(port, Math.max(0, Math.round(Number(waiting)) || 0));
+    showJobCount();
+    tellQueuePositions();
+  });
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+    waitingInLibraries.delete(port);
+    showJobCount();
+    tellQueuePositions();
+  });
+});
 
 // Jobs go to the img2img server one at a time, across every tab: sending them in a burst finishes no sooner and
 // costs more. The others wait here, first come first served: their pages hear how many are ahead ({ ahead }, 0 when
 // it's their turn) for their spinners, and can take a waiting job back ({ id, drop: true }), which answers it with a
 // dropped error. Pages hand jobs over ready to go (downloaded, hashed, cache checked), so the next one follows
 // without a gap. My ComfyUI is the user's own GPU, so the "Jobs at Once" setting lets it have up to
-// JOBS_AT_ONCE_MOST at a time.
-const JOBS_AT_ONCE_MOST = 4;
+// JOBS_AT_ONCE_MOST at a time (jobsAtOnceFor, in shared/workflows.js).
 let jobsAtOnce = 1;
 const jobQueue = { running: 0, waiting: [] }; // waiting: { job, start(), drop() }, first in line first
 
 async function readJobsAtOnce() {
   const { jobsAtOnce: setting, processingMode } = await chrome.storage.local.get(['jobsAtOnce', 'processingMode']);
-  const wanted = processingMode === 'local' ? Math.round(Number(setting)) || 1 : 1;
-  jobsAtOnce = Math.min(Math.max(wanted, 1), JOBS_AT_ONCE_MOST);
+  jobsAtOnce = jobsAtOnceFor(setting, processingMode);
   startWaitingJobs(); // raising it lets the jobs already waiting go
 }
 readJobsAtOnce();
@@ -355,7 +453,27 @@ function dropWaitingJobs(matches) {
 
 function tellQueuePositions() {
   jobQueue.waiting.forEach((entry, i) => entry.job.onWaiting?.(jobQueue.running + i));
+  // The popup, while it's open, shows how many are waiting (with its Clear button)
+  chrome.runtime.sendMessage({ action: 'queueChanged', waiting: jobQueue.waiting.length + waitingInPages() })?.catch?.(() => {});
 }
+
+// The popup asks how many jobs are waiting their turn, and can clear them all, in every tab. The jobs already at the
+// server or on ComfyUI go on. Each tab hears queueCleared: its jobs still being got ready never join the queue, and
+// Automatic Selection stops there, or it would pick the same images straight back.
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'queueStatus') {
+    sendResponse({ waiting: jobQueue.waiting.length + waitingInPages() });
+    return false;
+  }
+  if (request.action !== 'clearQueue') {
+    return false;
+  }
+  const cleared = jobQueue.waiting.length + waitingInPages();
+  dropWaitingJobs(() => true);
+  chrome.tabs.query({}).then(tabs => tabs.forEach(tab => chrome.tabs.sendMessage(tab.id, { action: 'queueCleared' }).catch(() => {})));
+  sendResponse({ cleared });
+  return false;
+});
 
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== JOB_PORT) return;
@@ -381,7 +499,12 @@ chrome.runtime.onConnect.addListener(port => {
     job.onWaiting = ahead => tell({ ahead });
     jobs.set(id, job);
     countJob(1);
-    runJob(job).then(data => ({ id, data, key: job.cacheKey }), error => ({ id, error: error.message, ...(error.dropped && { dropped: true }) })).then(reply => {
+    runJob(job).then(data => ({ id, data, key: job.cacheKey }), async error => ({
+      id,
+      error: error.message,
+      ...(error.dropped && { dropped: true }),
+      ...(error.outage && { notice: await outageNotice() })
+    })).then(reply => {
       jobs.delete(id);
       countJob(-1);
       if (job.pageOpen) {
@@ -398,10 +521,10 @@ chrome.runtime.onConnect.addListener(port => {
       job.pageOpen = false;
     }
     const { openResultsInNewTab, autoDownload } = await chrome.storage.local.get(['openResultsInNewTab', 'autoDownload']);
-    if (!openResultsInNewTab && !autoDownload) {
-      dropWaitingJobs(job => pageJobs.includes(job));
-      pageJobs.forEach(job => cancelComfyJob(job).catch(error => console.debug('Cancelling a ComfyUI job failed:', error)));
-    }
+    // (the Library page's jobs never outlive it: it is the one place their results go, see runJob)
+    const endsWithThePage = job => job.fromLibrary || (!openResultsInNewTab && !autoDownload);
+    dropWaitingJobs(job => pageJobs.includes(job) && endsWithThePage(job));
+    pageJobs.filter(endsWithThePage).forEach(job => cancelComfyJob(job).catch(error => console.debug('Cancelling a ComfyUI job failed:', error)));
   });
 });
 
@@ -420,25 +543,53 @@ async function runJob(job) {
   } finally {
     releaseJobSlot();
   }
+  // The Library page shows its results in its own viewer and saves each one itself, into a folder named after the one
+  // the file came from: no tab for it, and no second copy in Downloads
+  if (job.fromLibrary) {
+    return data;
+  }
   // On a direct .jpg/.png URL the result already is the whole page, so it opens in a tab only once that page is gone
   const { openResultsInNewTab, autoDownload } = await chrome.storage.local.get(['openResultsInNewTab', 'autoDownload']);
-  if (openResultsInNewTab && !(job.pageOpen && job.isImagePage)) {
+  // A result tab's image processed again gets its new result in its dropdown there (addsToImage), with no tab either
+  if (openResultsInNewTab && !(job.pageOpen && (job.isImagePage || job.addsToImage))) {
+    if (job.original) rememberOriginal(job.hash, job.original);
     openResultTab(job, job.sourceTab);
   }
   // Download Results Automatically: saved here rather than by the page, so a page that's gone still gets its results
-  // saved. Named like its download button's (content.js's downloadSwappedImage)
+  // saved. Named like its download button's (content.js's downloadSwappedImage). With Double Download on, the
+  // original follows the result as it does from the button: the page sent it with the job (its originalForJob)
   if (autoDownload) {
     const type = data.match(/^data:image\/([^;,]+)/)?.[1] || 'png';
-    downloadResult(data, `${job.name || 'img2img'}-img2img.${type === 'jpeg' ? 'jpg' : type}`)
-      .catch(error => console.warn('Downloading the result automatically failed:', error.message));
+    const filename = `${job.name || 'img2img'}-img2img.${type === 'jpeg' ? 'jpg' : type}`;
+    downloadResult(data, filename)
+      .catch(error => console.warn('Downloading the result automatically failed:', error.message))
+      .then(async () => {
+        const { downloadOriginal: double } = await chrome.storage.local.get('downloadOriginal');
+        if (double === true && job.original) await downloadOriginal(job.original, filename);
+      })
+      .catch(error => console.warn('Downloading the original automatically failed:', error.message));
   }
   return data;
 }
 
+// The server didn't answer, or answered that it can't do anything right now (5xx): an outage, which the page's
+// error explains with the current warning announcement if there is one (outageNotice)
+async function jobApiFetch(path, options) {
+  try {
+    return await apiFetch(path, options);
+  } catch (error) {
+    throw Object.assign(error, { outage: true });
+  }
+}
+
+function serverJobError(status, data) {
+  return Object.assign(new Error(data.error || `The img2img server returned HTTP ${status}`), { outage: status >= 500 });
+}
+
 async function runServerJob(job) {
-  const submitted = await apiFetch('/v1/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job.body) });
+  const submitted = await jobApiFetch('/v1/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job.body) });
   if (submitted.status !== 202) {
-    throw new Error(submitted.data.error || `The img2img server returned HTTP ${submitted.status}`);
+    throw serverJobError(submitted.status, submitted.data);
   }
   // How long the job's workflow typically takes, for the page's spinner (servers that don't know leave it out)
   if (Number.isFinite(submitted.data.estimatedWaitMs) && submitted.data.estimatedWaitMs > 0) {
@@ -446,9 +597,9 @@ async function runServerJob(job) {
   }
   let startTime = Date.now();
   while (Date.now() - startTime < SERVER_TIMEOUT_MS) {
-    const { status, data } = await apiFetch(`/v1/jobs/${encodeURIComponent(submitted.data.jobId)}`);
+    const { status, data } = await jobApiFetch(`/v1/jobs/${encodeURIComponent(submitted.data.jobId)}`);
     if (status !== 200) {
-      throw new Error(data.error || `The img2img server returned HTTP ${status}`);
+      throw serverJobError(status, data);
     }
     // The clock starts when the job is picked up, not when it was sent: before that it is waiting its turn
     if (data.status === 'queued') {
@@ -622,7 +773,7 @@ async function runComfyPrompt(job) {
       if (!outputImage) {
         throw new Error('ComfyUI finished without producing an image');
       }
-      const data = await fetchComfyResult(`/api/view?${new URLSearchParams(outputImage)}`);
+      const data = await fetchComfyResult(`/api/view?${new URLSearchParams(outputImage)}`, job.keepWorkflow);
       job.cacheKey = await addToCache(job.hash, data, job.imageUrl, job.name)
         .catch(error => void console.error('Caching the result failed:', error));
       return data;
@@ -708,13 +859,37 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// Right-click menu: an image's context menu offers the workflow chosen in the popup ("img2img: Upscale"), so a
-// single image can be processed without turning Manual Selection on. content.js finds the image that was
-// right-clicked and runs it through the same path as a click there. Chrome offers the item on images only, so an
-// element with a CSS background picture is still Manual Selection's job.
+// Right-click menu: an image's or a video's context menu offers the workflow chosen in the popup ("img2img:
+// Upscale"), so a single image can be processed without turning Manual Selection on. content.js finds the image
+// that was right-clicked and runs it through the same path as a click there; a video is taken as the frame it
+// showed when the menu opened.
+//
+// The browser only counts a right-click as one on an image or a video when that element itself is what was
+// clicked. Many pages lay an empty layer over their pictures, or show them as a CSS background, and there the
+// click is one on the page or on a link. A second item serves those: it's for a click on the page or a link, and
+// stays hidden unless content.js has found a picture under the pointer (the 'pictureUnderPointer' message).
+//
+// Next to it, Download saves what the picture shows: its result where one is on show (as its download button
+// does), otherwise the picture as it is, or a video's frame as a PNG. The browser's own items save a video as the
+// whole video and know nothing of results, backgrounds or pictures under a layer.
+//
+// With more than one item the browser lists them under "img2img", so the items themselves don't say it again.
 const RUN_MENU_ID = 'img2img-run-workflow';
+const COVERED_MENU_ID = 'img2img-run-workflow-covered';
+const RUN_MENU_IDS = [RUN_MENU_ID, COVERED_MENU_ID];
+const DOWNLOAD_MENU_IDS = ['img2img-download-image', 'img2img-download-frame', 'img2img-download-covered'];
 
-// "img2img: <the chosen workflow>"
+// The items in the order the menu lists them. A title of null is the chosen workflow's name (runMenuTitle); covered
+// items are the ones shown only while content.js says there's a picture under the pointer.
+const MENU_ITEMS = [
+  { id: RUN_MENU_ID, title: null, contexts: ['image', 'video'] },
+  { id: COVERED_MENU_ID, title: null, contexts: ['page', 'link'], covered: true },
+  { id: DOWNLOAD_MENU_IDS[0], title: 'Download image', contexts: ['image'] },
+  { id: DOWNLOAD_MENU_IDS[1], title: 'Download frame', contexts: ['video'] },
+  { id: DOWNLOAD_MENU_IDS[2], title: 'Download image', contexts: ['page', 'link'], covered: true },
+];
+
+// The chosen workflow's name
 async function runMenuTitle() {
   const { workflow, customWorkflows } = await chrome.storage.local.get(['workflow', 'customWorkflows']);
   const chosen = WORKFLOW_REPLACEMENTS[workflow] || workflow || DEFAULT_WORKFLOW;
@@ -723,27 +898,54 @@ async function runMenuTitle() {
     ? (customWorkflows || []).find(definition => definition.id === customId)?.name
     : WORKFLOW_LABELS[chosen];
   // A workflow that's no longer there (one of the user's own, deleted) falls back to the default, as the popup does
-  return `img2img: ${name || WORKFLOW_LABELS[DEFAULT_WORKFLOW]}`;
+  return name || WORKFLOW_LABELS[DEFAULT_WORKFLOW];
 }
 
 function createRunMenu() {
-  // The browser keeps the items of an earlier run, which would make creating this one a duplicate-id error
+  // The browser keeps the items of an earlier run, which would make creating these a duplicate-id error
   chrome.contextMenus.removeAll(async () => {
-    chrome.contextMenus.create(
-      { id: RUN_MENU_ID, title: await runMenuTitle(), contexts: ['image'] },
-      () => void chrome.runtime.lastError,
-    );
+    const runTitle = await runMenuTitle();
+    for (const { id, title, contexts, covered } of MENU_ITEMS) {
+      chrome.contextMenus.create(
+        { id, title: title ?? runTitle, contexts, ...(covered ? { visible: false } : {}) },
+        () => void chrome.runtime.lastError,
+      );
+    }
   });
 }
 
-// The item is named after the chosen workflow, so it follows the popup's choice (and a renamed workflow of the
-// user's own). Where there's no item to update (a browser session that didn't keep the menus) it's created.
+// The run items are named after the chosen workflow, so they follow the popup's choice (and a renamed workflow of
+// the user's own). Where an item isn't there to update (a browser session that didn't keep the menus, or a version
+// that had fewer items) they're all created.
 async function updateRunMenu() {
-  const title = await runMenuTitle();
-  chrome.contextMenus.update(RUN_MENU_ID, { title }, () => {
-    if (chrome.runtime.lastError) createRunMenu();
-  });
+  const runTitle = await runMenuTitle();
+  let missing = false;
+  const updated = MENU_ITEMS.map(({ id, title }) => new Promise(resolve => {
+    chrome.contextMenus.update(id, { title: title ?? runTitle }, () => {
+      if (chrome.runtime.lastError) missing = true;
+      resolve();
+    });
+  }));
+  await Promise.all(updated);
+  if (missing) createRunMenu();
 }
+
+// content.js says whether the pointer is over a picture the browser's own menu wouldn't offer the items for. Only
+// the tab being looked at counts: the menu is one for the whole browser.
+chrome.runtime.onMessage.addListener((request, sender) => {
+  if (request.action === 'pictureUnderPointer' && sender.tab?.active) {
+    let missing = false;
+    const updated = MENU_ITEMS.filter(item => item.covered).map(({ id }) => new Promise(resolve => {
+      chrome.contextMenus.update(id, { visible: Boolean(request.covered) }, () => {
+        if (chrome.runtime.lastError) missing = true;
+        resolve();
+      });
+    }));
+    // (an install that came from a version with fewer items gets the others here)
+    Promise.all(updated).then(() => missing && updateRunMenu());
+  }
+  return false;
+});
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && (changes.workflow || changes.customWorkflows)) {
@@ -752,7 +954,12 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== RUN_MENU_ID || !tab?.id) return;
+  if (!tab?.id) return;
+  if (DOWNLOAD_MENU_IDS.includes(info.menuItemId)) {
+    sendToTab(tab.id, { action: 'downloadRightClicked', srcUrl: info.srcUrl });
+    return;
+  }
+  if (!RUN_MENU_IDS.includes(info.menuItemId)) return;
   const { selectedSourceId } = await chrome.storage.local.get('selectedSourceId');
   sendToTab(tab.id, { action: 'runWorkflowOnImage', srcUrl: info.srcUrl, sourceId: selectedSourceId });
 });
@@ -792,36 +999,53 @@ async function isProbeFlagged(path) {
 
 // ComfyUI writes the graph it ran into every PNG it saves (unless it was started with --disable-metadata). For My
 // ComfyUI that graph holds the page image and every source image as base64, and all the settings, so a result
-// shared or downloaded as PNG would carry them. Results keep only the chunks that draw the image.
+// shared or downloaded as PNG would carry them. Results keep only the chunks that draw the image, except a My
+// workflows result made with Keep Workflow in Results on (job.keepWorkflow, from content.js): that graph is the
+// user's own, run on their own ComfyUI, and keeping it means dropping the result into ComfyUI opens the workflow
+// that made it.
 const PNG_TEXT_CHUNKS = ['tEXt', 'iTXt', 'zTXt'];
 function withoutPngText(bytes) {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.length < 8 || view.getUint32(0) !== 0x89504e47) {
-    return bytes; // not a PNG
-  }
+  if (!isPng(bytes)) return bytes;
   const kept = [bytes.subarray(0, 8)];
-  for (let offset = 8; offset + 12 <= bytes.length;) {
-    const end = offset + 12 + view.getUint32(offset);
-    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+  for (const { type, start, end } of pngChunks(bytes)) {
     if (!PNG_TEXT_CHUNKS.includes(type)) {
-      kept.push(bytes.subarray(offset, end));
+      kept.push(bytes.subarray(start, end));
     }
-    offset = end;
-    if (type === 'IEND') break;
   }
   const out = new Uint8Array(kept.reduce((total, part) => total + part.length, 0));
   kept.reduce((at, part) => (out.set(part, at), at + part.length), 0);
   return out;
 }
 
-// The result image as a data URL
-async function fetchComfyResult(path) {
+function isPng(bytes) {
+  return bytes.length >= 8 && new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0) === 0x89504e47;
+}
+
+// A PNG's chunks after its signature, as { type, start, end } (byte offsets of the whole chunk)
+function* pngChunks(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let offset = 8; offset + 12 <= bytes.length;) {
+    const end = offset + 12 + view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    yield { type, start: offset, end };
+    offset = end;
+    if (type === 'IEND') break;
+  }
+}
+
+// The result image as a data URL, without the graph ComfyUI wrote into it unless the job keeps it
+async function fetchComfyResult(path, keepText = false) {
   const response = await fetch(await comfyAddress() + path);
   if (!response.ok) {
     throw new Error(`ComfyUI returned HTTP ${response.status} for the processed image`);
   }
   const type = response.headers.get('content-type') || 'image/png';
-  const blob = new Blob([withoutPngText(new Uint8Array(await response.arrayBuffer()))], { type });
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return dataUrlOf(new Blob([keepText ? bytes : withoutPngText(bytes)], { type }));
+}
+
+// A Blob as a data URL (the service worker has no URL.createObjectURL)
+function dataUrlOf(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -863,8 +1087,12 @@ const initDB = new Promise((resolve, reject) => {
 
 // Cache setup
 const CACHE_DB_NAME = 'imageSwapCache';
+// A cached result is kept in two parts under the same key: what's known about it (its page image, name, time and
+// thumbnail) in the first store, and its picture in the second. Listing the cache and finding a page image's results
+// then read only the small part; a picture is read when it's wanted, by its key.
 const CACHE_STORE_NAME = 'images';
-const CACHE_DB_VERSION = 5;
+const PICTURE_STORE_NAME = 'pictures';
+const CACHE_DB_VERSION = 6;
 // How many results the cache keeps: the Cache Size setting (cacheSize) on the settings page, one of these
 const CACHE_SIZES = [25, 50, 100, 200, 500];
 const DEFAULT_CACHE_SIZE = 50;
@@ -917,16 +1145,25 @@ const initCacheDB = new Promise((resolve, reject) => {
       store.createIndex('sourceHash', 'sourceHash', { unique: false });
       console.log('Added sourceHash index to cache store');
     }
+    const pictures = db.objectStoreNames.contains(PICTURE_STORE_NAME)
+      ? event.target.transaction.objectStore(PICTURE_STORE_NAME)
+      : db.createObjectStore(PICTURE_STORE_NAME, { keyPath: 'hash' });
     // Version 4 leaves signed URLs' changing parameters out of the image URL key (see cacheImageUrl). Version 5 keys
     // each result on its own, so the results from before it get a key of their own and keep their hash as sourceHash.
-    if (event.oldVersion > 0 && event.oldVersion < 5) {
+    // Version 6 moves each picture into the pictures store. One pass does both: a re-keyed entry comes up again
+    // further on, already re-keyed, and has its picture moved then.
+    if (event.oldVersion > 0 && event.oldVersion < 6) {
       store.openCursor().onsuccess = cursorEvent => {
         const cursor = cursorEvent.target.result;
         if (!cursor) return;
         const entry = cursor.value;
-        if (!entry.sourceHash) { // (the re-keyed entries come up again further on)
+        if (!entry.sourceHash) {
           cursor.delete();
           store.put({ ...entry, imageUrl: cacheImageUrl(entry.imageUrl), sourceHash: entry.hash, hash: newCacheKey(entry.hash) });
+        } else if ('processedImage' in entry) {
+          const { processedImage, ...details } = entry;
+          pictures.put({ hash: entry.hash, processedImage });
+          cursor.update(details);
         }
         cursor.continue();
       };
@@ -975,22 +1212,42 @@ function newCacheKey(sourceHash) {
 }
 
 // The newest of some cache entries' results
-function newestResult(entries) {
-  return entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0]?.processedImage || null;
+function newestEntry(entries) {
+  return entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0] || null;
 }
 
 // Get from cache. hash is a source hash (the newest result of that image and settings) or a result's own key (the
 // cache page, viewer.html). With no hash, only the loose lookup by image URL runs (used by Swap Cache, which skips
 // downloading and hashing the page image).
 async function getFromCache(hash, imageUrl, allowLooseCacheLink = false) {
+  return (await findInCache(hash, imageUrl, allowLooseCacheLink))?.processedImage || null;
+}
+
+// The same lookup, resolving with the whole entry ({ hash, processedImage, ... }) rather than the picture alone:
+// a page is told the key of the result it is sent, which is what the result's delete button removes it by
+async function findInCache(hash, imageUrl, allowLooseCacheLink = false) {
   imageUrl = cacheImageUrl(imageUrl);
   try {
     if (!cacheDB) {
       await initCacheDB;
     }
     return new Promise((resolve, reject) => {
-      const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readonly');
+      const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readonly');
       const store = transaction.objectStore(CACHE_STORE_NAME);
+
+      // The entry found, with its picture; null when there's no entry or its picture is gone
+      const withPicture = (entry, then) => {
+        if (!entry) {
+          then(null);
+          return;
+        }
+        const pictureRequest = transaction.objectStore(PICTURE_STORE_NAME).get(entry.hash);
+        pictureRequest.onerror = () => reject(pictureRequest.error);
+        pictureRequest.onsuccess = () => {
+          const processedImage = pictureRequest.result?.processedImage;
+          then(processedImage ? { ...entry, processedImage } : null);
+        };
+      };
 
       const looseLookup = () => {
         if (!imageUrl || !allowLooseCacheLink) {
@@ -1000,7 +1257,7 @@ async function getFromCache(hash, imageUrl, allowLooseCacheLink = false) {
         const urlRequest = store.index('imageUrl').getAll(imageUrl);
         urlRequest.onerror = () => reject(urlRequest.error);
         // An image keeps all its results (see addToCache): the newest is the one shown
-        urlRequest.onsuccess = () => resolve(newestResult(urlRequest.result));
+        urlRequest.onsuccess = () => withPicture(newestEntry(urlRequest.result), resolve);
       };
 
       if (!hash) {
@@ -1011,24 +1268,18 @@ async function getFromCache(hash, imageUrl, allowLooseCacheLink = false) {
       const sourceRequest = store.index('sourceHash').getAll(hash);
       sourceRequest.onerror = () => reject(sourceRequest.error);
       sourceRequest.onsuccess = () => {
-        const newest = newestResult(sourceRequest.result);
+        const newest = newestEntry(sourceRequest.result);
         if (newest) {
-          resolve(newest);
+          withPicture(newest, resolve);
           return;
         }
         const request = store.get(hash);
         request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          if (request.result?.processedImage) {
-            resolve(request.result.processedImage);
-          } else {
-            looseLookup();
-          }
-        };
+        request.onsuccess = () => withPicture(request.result, found => (found ? resolve(found) : looseLookup()));
       };
     });
   } catch (error) {
-    console.error('Error in getFromCache:', error);
+    console.error('Error in findInCache:', error);
     throw error;
   }
 }
@@ -1047,14 +1298,14 @@ async function addToCache(hash, processedImage, imageUrl, name) {
     const limit = await cacheSize();
     const key = newCacheKey(hash);
     return new Promise((resolve, reject) => {
-      const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(CACHE_STORE_NAME);
+      const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readwrite');
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
 
       // The new entry is the newest, so dropping the oldest beyond the limit never drops it
-      store.put({ hash: key, sourceHash: hash, processedImage, imageUrl, name, timestamp: Date.now() });
-      deleteOldest(store, limit);
+      transaction.objectStore(CACHE_STORE_NAME).put({ hash: key, sourceHash: hash, imageUrl, name, timestamp: Date.now() });
+      transaction.objectStore(PICTURE_STORE_NAME).put({ hash: key, processedImage });
+      deleteOldest(transaction, limit);
     }).then(() => {
       purgeExpired().catch(() => {}); // (its own transaction, once this one is in: an age that has passed isn't urgent)
       return key;
@@ -1070,9 +1321,16 @@ async function cacheSize() {
   return CACHE_SIZES.includes(size) ? size : DEFAULT_CACHE_SIZE;
 }
 
-// Delete a cache store's oldest entries until `keep` are left (by key, without loading their images); calls done
-// with how many it deleted
-function deleteOldest(store, keep, done = () => {}) {
+// Delete one cached result, both parts, in a transaction over both stores
+function deleteResult(transaction, key) {
+  transaction.objectStore(CACHE_STORE_NAME).delete(key);
+  transaction.objectStore(PICTURE_STORE_NAME).delete(key);
+}
+
+// Delete the cache's oldest results until `keep` are left (by key, without loading them), in a transaction over both
+// stores; calls done with how many it deleted
+function deleteOldest(transaction, keep, done = () => {}) {
+  const store = transaction.objectStore(CACHE_STORE_NAME);
   const countRequest = store.count();
   countRequest.onsuccess = () => {
     const excess = countRequest.result - keep;
@@ -1087,7 +1345,7 @@ function deleteOldest(store, keep, done = () => {}) {
         done(deleted);
         return;
       }
-      store.delete(cursor.primaryKey);
+      deleteResult(transaction, cursor.primaryKey);
       deleted++;
       cursor.continue();
     };
@@ -1134,15 +1392,14 @@ async function purgeExpired() {
   }
   const oldest = Date.now() - cacheKeepDays * 24 * 60 * 60 * 1000;
   return new Promise((resolve, reject) => {
-    const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(CACHE_STORE_NAME);
+    const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readwrite');
     let deleted = 0;
-    store.index('timestamp').openKeyCursor(IDBKeyRange.upperBound(oldest)).onsuccess = event => {
+    transaction.objectStore(CACHE_STORE_NAME).index('timestamp').openKeyCursor(IDBKeyRange.upperBound(oldest)).onsuccess = event => {
       const cursor = event.target.result;
       if (!cursor) {
         return;
       }
-      store.delete(cursor.primaryKey);
+      deleteResult(transaction, cursor.primaryKey);
       deleted++;
       cursor.continue();
     };
@@ -1167,16 +1424,17 @@ async function trimCache() {
   }
   const limit = await cacheSize();
   return new Promise((resolve, reject) => {
-    const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readwrite');
+    const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readwrite');
     let deleted = 0;
-    deleteOldest(transaction.objectStore(CACHE_STORE_NAME), limit, count => { deleted = count; });
+    deleteOldest(transaction, limit, count => { deleted = count; });
     transaction.oncomplete = () => resolve(deleted);
     transaction.onerror = () => reject(transaction.error);
   });
 }
 
 // The cached results without their images (but with their thumbnails, once the cache page has made them), newest
-// first, for the cache page (cache.html), which loads each image by its hash as it's shown
+// first, for the cache page (cache.html), which loads each image by its hash as it's shown. Only the small part of
+// each result is read (see PICTURE_STORE_NAME).
 async function listCache() {
   if (!cacheDB) {
     await initCacheDB;
@@ -1215,17 +1473,80 @@ async function setCacheThumbnail(hash, thumbnail) {
   });
 }
 
-// Delete one cached result (from the cache page)
-async function deleteFromCache(hash) {
+// Delete one cached result by its key (the cache page, the viewer, and a result's delete button on the page), and
+// with deleteFiles the files it was downloaded as (see deleteDownloadedFiles). Resolves with how many files went,
+// and the error if one couldn't; the result goes either way.
+async function deleteFromCache(hash, { deleteFiles = false } = {}) {
+  if (!cacheDB) {
+    await initCacheDB;
+  }
+  const files = deleteFiles ? await deleteDownloadedFiles(hash) : { filesDeleted: 0 };
+  await new Promise((resolve, reject) => {
+    const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readwrite');
+    deleteResult(transaction, hash);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  return files;
+}
+
+// One cached result by its key, with its picture, or null
+async function cacheEntry(hash) {
   if (!cacheDB) {
     await initCacheDB;
   }
   return new Promise((resolve, reject) => {
-    const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readwrite');
-    transaction.objectStore(CACHE_STORE_NAME).delete(hash);
-    transaction.oncomplete = () => resolve();
+    const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readonly');
+    const request = transaction.objectStore(CACHE_STORE_NAME).get(hash);
+    const pictureRequest = transaction.objectStore(PICTURE_STORE_NAME).get(hash);
+    transaction.oncomplete = () => resolve(request.result ? { ...request.result, processedImage: pictureRequest.result?.processedImage } : null);
     transaction.onerror = () => reject(transaction.error);
   });
+}
+
+// The downloads of a cached result that are still there to delete: the browser's records of them (chrome.downloads
+// keeps where each file went), found by the ids kept with the result's fingerprint (markResultDownloaded). A
+// download taken out of the browser's history is left out, as is one whose file the browser has seen go (it only
+// looks now and then: a file deleted by hand may still be offered, and removing it again does no harm). Resolves
+// with { key, files: [{ id, path }] }.
+async function downloadsOf(hash) {
+  const entry = await cacheEntry(hash);
+  if (!entry?.processedImage || !chrome.downloads?.search) {
+    return { key: null, files: [] };
+  }
+  const key = resultKey(entry.processedImage);
+  const { downloadedFiles = {} } = await chrome.storage.local.get('downloadedFiles');
+  const found = await Promise.all((downloadedFiles[key] || []).map(id => chrome.downloads.search({ id }).catch(() => [])));
+  const files = found.flat()
+    .filter(item => item.state === 'complete' && item.exists !== false && item.filename)
+    .map(item => ({ id: item.id, path: item.filename }));
+  return { key, files };
+}
+
+async function downloadedFilesOf(hash) {
+  return (await downloadsOf(hash)).files;
+}
+
+// Delete the files a cached result was downloaded as (chrome.downloads.removeFile: the browser's record of the
+// download stays, saying the file is gone, as when a file is deleted by hand), and forget that the result was
+// downloaded, so its download button is live again. Resolves with how many went, and the first error met; a file
+// that couldn't go is still remembered.
+async function deleteDownloadedFiles(hash) {
+  const { key, files } = await downloadsOf(hash);
+  let filesDeleted = 0;
+  let fileError;
+  for (const file of files) {
+    try {
+      await chrome.downloads.removeFile(file.id);
+      filesDeleted++;
+    } catch (error) {
+      fileError = fileError || error?.message || String(error);
+    }
+  }
+  if (key && !fileError) {
+    await forgetResultDownloaded(key);
+  }
+  return fileError ? { filesDeleted, fileError } : { filesDeleted };
 }
 
 // Delete every cached result; resolves with how many there were
@@ -1234,10 +1555,13 @@ async function clearCache() {
     await initCacheDB;
   }
   return new Promise((resolve, reject) => {
-    const transaction = cacheDB.transaction(CACHE_STORE_NAME, 'readwrite');
+    const transaction = cacheDB.transaction([CACHE_STORE_NAME, PICTURE_STORE_NAME], 'readwrite');
     const store = transaction.objectStore(CACHE_STORE_NAME);
     const countRequest = store.count();
-    countRequest.onsuccess = () => store.clear();
+    countRequest.onsuccess = () => {
+      store.clear();
+      transaction.objectStore(PICTURE_STORE_NAME).clear();
+    };
     transaction.oncomplete = () => resolve(countRequest.result);
     transaction.onerror = () => reject(transaction.error);
   });
@@ -1295,40 +1619,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'downloadImage') {
-    downloadResult(request.dataUrl, request.filename)
+    // (folder: the Library page's, a folder of its own for the results of each folder opened there)
+    downloadResult(request.dataUrl, request.filename, request.folder)
       .then(downloadId => sendResponse({ success: true, downloadId }), error => sendResponse({ success: false, error: error.message }));
     return true; // Keep the message channel open for async response
   }
 
-  if (request.action === 'openCompareTab') {
-    const id = crypto.randomUUID();
-    compareImages.set(id, { original: request.original, result: request.result });
-    // Only the latest few stay in memory (they're full images)
-    while (compareImages.size > MAX_COMPARE_IMAGES) {
-      compareImages.delete(compareImages.keys().next().value);
-    }
-    const url = chrome.runtime.getURL(`compare.html?${new URLSearchParams({ id, name: request.name || 'image' })}`);
-    const nextTo = sender.tab && !sender.tab.incognito ? { index: sender.tab.index + 1, openerTabId: sender.tab.id, windowId: sender.tab.windowId } : {};
-    chrome.tabs.create({ url, ...nextTo })
-      .then(() => sendResponse({ success: true }), error => sendResponse({ success: false, error: error.message }));
-    return true; // answered asynchronously
+  // A result as it would be downloaded, without downloading it: a JPG or the picture as it is, by the Download as
+  // JPG and Keep Workflow in Results settings (see downloadableImage). The Library page puts these in its ZIP, so a
+  // result is the same file there as when it is saved by itself.
+  if (request.action === 'downloadableImage') {
+    downloadableImage({ dataUrl: request.dataUrl, filename: request.filename })
+      .then(image => sendResponse({ success: true, ...image }), error => sendResponse({ success: false, error: error.message }));
+    return true;
   }
 
-  if (request.action === 'getCompareImages') {
-    const images = compareImages.get(request.id);
-    sendResponse(images ? { success: true, ...images } : { success: false });
-    return false;
+  // Double Download: the original of a result just downloaded, sent after it by the same button. It comes as a
+  // data URL (the page read it, or has it, as for a video's frame), or as a URL for this script to fetch (the
+  // cache page knows only where its image came from); name is the result's download name
+  if (request.action === 'downloadOriginal') {
+    downloadOriginal(request.dataUrl || request.url, request.name)
+      .then(downloadId => sendResponse({ success: true, downloadId }), error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  // The right-click menu's Download, for a picture with no result on show: saved as it is (see downloadAsIs), name
+  // being its file name without the extension
+  if (request.action === 'downloadPicture') {
+    downloadAsIs(request.dataUrl, request.name)
+      .then(downloadId => sendResponse({ success: true, downloadId }), error => sendResponse({ success: false, error: error.message }));
+    return true;
   }
 
   if (request.action === 'openResultTab') {
+    if (request.original) rememberOriginal(request.hash, request.original);
     openResultTab(request, sender.tab);
     sendResponse({ success: true });
     return false;
   }
 
+  // The original of a result, for the tab it opened in (see rememberOriginal)
+  if (request.action === 'getOriginalImage') {
+    sendResponse({ success: true, original: originalImages.get(request.hash) || null });
+    return false;
+  }
+
   if (request.action === 'getFromCache') {
-    getFromCache(request.hash, request.imageUrl, request.allowLooseCacheLink)
-      .then(result => sendResponse({ success: true, result }))
+    findInCache(request.hash, request.imageUrl, request.allowLooseCacheLink)
+      .then(entry => sendResponse({ success: true, result: entry?.processedImage || null, hash: entry?.hash, imageUrl: entry?.imageUrl }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true; // Keep the message channel open for async response
   }
@@ -1355,8 +1693,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'deleteFromCache') {
-    deleteFromCache(request.hash)
-      .then(() => sendResponse({ success: true }))
+    deleteFromCache(request.hash, { deleteFiles: request.deleteFiles === true })
+      .then(files => sendResponse({ success: true, ...files }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true; // Keep the message channel open for async response
+  }
+
+  // The files a cached result was downloaded as, for the question its delete button asks (see downloadedFilesOf)
+  if (request.action === 'downloadedFiles') {
+    downloadedFilesOf(request.hash)
+      .then(files => sendResponse({ success: true, files }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true; // Keep the message channel open for async response
   }
@@ -1395,6 +1741,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 const pendingDownloadNames = new Map();
 let namingDownloads = false;
 
+// The event, where the browser has it (the Firefox package has only the line that says it doesn't)
+const downloadNaming = chrome.downloads.onDeterminingFilename; // chromium-only
+// firefox: const downloadNaming = undefined;
+
 // How long a download has to ask for its name before we stop listening: it may be blocked and never ask
 const DOWNLOAD_NAME_TIMEOUT = 60000;
 
@@ -1409,10 +1759,10 @@ function suggestDownloadName(item, suggest) {
 }
 
 function rememberDownloadName(url, name) {
-  if (!chrome.downloads.onDeterminingFilename) return;
+  if (!downloadNaming) return;
   pendingDownloadNames.set(url, name);
   if (!namingDownloads) {
-    chrome.downloads.onDeterminingFilename.addListener(suggestDownloadName);
+    downloadNaming.addListener(suggestDownloadName);
     namingDownloads = true;
   }
   // A retry under the same URL replaces the name, and its own timer takes over from this one
@@ -1424,7 +1774,7 @@ function rememberDownloadName(url, name) {
 function forgetDownloadName(url) {
   pendingDownloadNames.delete(url);
   if (namingDownloads && pendingDownloadNames.size === 0) {
-    chrome.downloads.onDeterminingFilename.removeListener(suggestDownloadName);
+    downloadNaming.removeListener(suggestDownloadName);
     namingDownloads = false;
   }
 }
@@ -1439,10 +1789,20 @@ chrome.downloads.onChanged.addListener(({ id, state }) => {
   }
 });
 
-// The image pairs for compare.html tabs, by id. Kept in memory only: after the service worker restarts, a
-// reloaded compare tab asks for the comparison to be opened again.
-const compareImages = new Map();
-const MAX_COMPARE_IMAGES = 5;
+// The originals of results that opened in tabs of their own, by the hash the tab was opened with (the page sends
+// it with the job, or with its request to open a cached result; see originalForResultTab in content.js). The viewer
+// asks for it as it loads, and reads the original from its URL instead once this is gone. In memory only, and the
+// latest few: they're whole page images.
+const originalImages = new Map();
+const MAX_ORIGINAL_IMAGES = 5;
+
+function rememberOriginal(hash, original) {
+  originalImages.delete(hash);
+  originalImages.set(hash, original);
+  while (originalImages.size > MAX_ORIGINAL_IMAGES) {
+    originalImages.delete(originalImages.keys().next().value);
+  }
+}
 
 // Downloaded results are remembered (by a fingerprint of the image data) so their download buttons stay
 // greyed out, on every page and in later sessions. Same function in content.js and viewer.js.
@@ -1464,8 +1824,26 @@ function isPngWithAlpha(dataUrl) {
   return [4, 6].includes(header.charCodeAt(25));
 }
 
+// The bytes of a PNG data URL, or null for anything else
+async function pngBytes(dataUrl) {
+  if (!dataUrl.startsWith('data:image/png;base64,')) return null;
+  const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
+  return isPng(bytes) ? bytes : null;
+}
+
+// Whether a PNG has text chunks. Only a My workflows result made with Keep Workflow in Results on has them (see
+// fetchComfyResult); every other result has them taken out.
+function hasPngText(bytes) {
+  for (const { type } of pngChunks(bytes)) {
+    if (PNG_TEXT_CHUNKS.includes(type)) return true;
+  }
+  return false;
+}
+
 // "Download as JPG" setting (on unless turned off): re-encode the result as a JPG to save space.
-// PNGs with transparency stay PNG, since JPG would lose it.
+// PNGs with transparency stay PNG, since JPG would lose it, and so does a PNG that carries its workflow while Keep
+// Workflow in Results is on: dropping the file into ComfyUI opens the workflow only while the graph is in it, and
+// a JPG can't hold it.
 // A download name Chrome accepts: no characters Windows or Chrome reject (slashes, colons, quotes, control
 // and right-to-left marks), no leading dots or spaces
 function safeFilename(filename) {
@@ -1505,7 +1883,15 @@ const DEFAULT_JPG_QUALITY = 92;
 
 async function downloadableImage({ dataUrl, filename }) {
   filename = safeFilename(filename);
-  const { downloadAsJpg, jpgQuality } = await chrome.storage.local.get(['downloadAsJpg', 'jpgQuality']);
+  const { downloadAsJpg, jpgQuality, keepWorkflowInResult } = await chrome.storage.local.get(['downloadAsJpg', 'jpgQuality', 'keepWorkflowInResult']);
+  // A PNG with text chunks is a My workflows result that kept its workflow. While Keep Workflow in Results is on it
+  // stays a PNG, since a JPG can't carry the workflow; with the setting off since (a result from before), the text
+  // comes out on the way, as it does from every other result
+  const bytes = await pngBytes(dataUrl);
+  if (bytes && hasPngText(bytes)) {
+    if (keepWorkflowInResult === true) return { url: await downloadUrl(dataUrl), filename };
+    dataUrl = await dataUrlOf(new Blob([withoutPngText(bytes)], { type: 'image/png' }));
+  }
   // (WebP results are transparent ones the server re-encoded to fit: keep them as they are)
   if (downloadAsJpg === false || /^data:image\/(jpeg|webp)/.test(dataUrl) || isPngWithAlpha(dataUrl)) {
     return { url: await downloadUrl(dataUrl), filename };
@@ -1529,21 +1915,57 @@ async function downloadUrl(image) {
     return URL.createObjectURL(typeof image === 'string' ? await (await fetch(image)).blob() : image);
   }
   if (typeof image === 'string') return image;
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(image);
-  });
+  return dataUrlOf(image);
 }
 
 // Save a result to Downloads (its download button, or Download Results Automatically); resolves to the download's id.
+async function downloadResult(dataUrl, filename, subfolder) {
+  const downloadId = await saveToDownloads(await downloadableImage({ dataUrl, filename }), subfolder);
+  // Keyed by the result itself, not the JPG copy, so the page can match it. Recorded before the page hears the
+  // download went through: what it does next (delete the result, with its file) goes by the record.
+  await markResultDownloaded(resultKey(dataUrl), downloadId);
+  return downloadId;
+}
+
+// "Double Download" setting (downloadOriginal, off to begin with): a download button saves the original image as
+// well, right after the result. It's saved as it is, in its own format rather than as a JPG: it is the original,
+// and what the page showed. Named like the result, with -original where the result has -img2img, so the two sit
+// together in the folder; the extension is the original's own. A URL in place of the data is fetched here.
+const IMAGE_EXTENSIONS = { jpeg: 'jpg', 'svg+xml': 'svg', 'x-icon': 'ico', 'vnd.microsoft.icon': 'ico', tiff: 'tif' };
+
+async function downloadOriginal(image, name) {
+  const base = safeFilename(name).replace(/\.[^.]*$/, '').replace(/-img2img$/, '');
+  return downloadAsIs(image, `${base}-original`);
+}
+
+// A picture saved as it is, in its own format, as "<base>.<its own extension>". A URL in place of the data is
+// fetched here.
+async function downloadAsIs(image, base) {
+  let dataUrl = image;
+  if (!/^data:/i.test(dataUrl)) {
+    // (a video's frame, say, which names a moment of the video rather than a file)
+    if (!/^https?:/i.test(dataUrl)) throw new Error('there is no URL to load it from');
+    const response = await fetch(dataUrl);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    dataUrl = await dataUrlOf(await response.blob());
+  }
+  const subtype = dataUrl.match(/^data:image\/([^;,]+)/)?.[1]?.toLowerCase() || 'png';
+  const extension = IMAGE_EXTENSIONS[subtype] || subtype;
+  return saveToDownloads({ url: await downloadUrl(dataUrl), filename: safeFilename(`${base || 'image'}.${extension}`) });
+}
+
+// Put an image ({ url, filename }) in Downloads; resolves to the download's id.
 // The Download Folder setting puts it in a subfolder of Downloads.
 // A name or folder Chrome still refuses gets a plain name in Downloads itself, rather than no download at all.
-async function downloadResult(dataUrl, filename) {
-  const image = await downloadableImage({ dataUrl, filename });
+// subfolder: a folder of its own inside that one (the Library page's results, by the folder their files came from),
+// or inside "img2img" when no Download Folder is set, so they don't land loose among everything else in Downloads.
+const LIBRARY_FOLDER = 'img2img';
+
+async function saveToDownloads(image, subfolder = '') {
   const { downloadFolder } = await chrome.storage.local.get('downloadFolder');
-  const folder = safeFolder(expandFolderTokens(downloadFolder));
+  const chosen = safeFolder(expandFolderTokens(downloadFolder));
+  const inside = safeFolder(subfolder);
+  const folder = inside ? `${chosen || LIBRARY_FOLDER}/${inside}` : chosen;
   const download = (name, retry) => new Promise((resolve, reject) => {
     rememberDownloadName(image.url, name);
     chrome.downloads.download({ url: image.url, filename: name }, downloadId => {
@@ -1556,8 +1978,6 @@ async function downloadResult(dataUrl, filename) {
       } else if (error || downloadId === undefined) {
         reject(new Error(error?.message || 'Download was blocked'));
       } else {
-        // Keyed by the result itself, not the JPG copy, so the page can match it
-        markResultDownloaded(resultKey(dataUrl));
         resolve(downloadId);
       }
     });
@@ -1565,11 +1985,32 @@ async function downloadResult(dataUrl, filename) {
   return download(folder ? `${folder}/${image.filename}` : image.filename, true);
 }
 
-function markResultDownloaded(key) {
-  chrome.storage.local.get('downloadedResults', ({ downloadedResults = [] }) => {
-    if (downloadedResults.includes(key)) return;
-    chrome.storage.local.set({ downloadedResults: [...downloadedResults, key].slice(-MAX_DOWNLOADED_RESULTS) });
-  });
+// The download's id goes with it (downloadedFiles: fingerprint -> the ids of its last few downloads), so the file
+// can be deleted along with the result (deleteDownloadedFiles). The ids of results no longer listed go with them.
+const MAX_DOWNLOADS_OF_A_RESULT = 5;
+
+// One at a time, so downloads close together (Download all on the cache page) don't write over each other's
+let markingDownloads = Promise.resolve();
+
+function markResultDownloaded(key, downloadId) {
+  markingDownloads = markingDownloads.then(async () => {
+    const { downloadedResults = [], downloadedFiles = {} } = await chrome.storage.local.get(['downloadedResults', 'downloadedFiles']);
+    const results = downloadedResults.includes(key) ? downloadedResults : [...downloadedResults, key].slice(-MAX_DOWNLOADED_RESULTS);
+    const files = Object.fromEntries(Object.entries(downloadedFiles).filter(([other]) => results.includes(other)));
+    if (downloadId !== undefined) {
+      files[key] = [...(files[key] || []), downloadId].slice(-MAX_DOWNLOADS_OF_A_RESULT);
+    }
+    await chrome.storage.local.set({ downloadedResults: results, downloadedFiles: files });
+  }).catch(error => console.warn('img2img: download not recorded', error));
+  return markingDownloads;
+}
+
+// The result went along with its files: it counts as not downloaded again
+async function forgetResultDownloaded(key) {
+  const { downloadedResults = [], downloadedFiles = {} } = await chrome.storage.local.get(['downloadedResults', 'downloadedFiles']);
+  const files = { ...downloadedFiles };
+  delete files[key];
+  await chrome.storage.local.set({ downloadedResults: downloadedResults.filter(other => other !== key), downloadedFiles: files });
 }
 
 // Open a converted image in a background tab next to the page it came from.

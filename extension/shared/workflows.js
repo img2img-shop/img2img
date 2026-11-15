@@ -9,7 +9,7 @@
 // The version of img2img's terms of service and acceptable use policy that My ComfyUI users agree to in the popup
 // (they have no account, so the agreement is kept by the extension: chrome.storage.local termsAgreedVersion).
 // Same as the site's config img2img.terms_version: change both when the terms change, and everyone is asked again.
-const TERMS_VERSION = '2026-11-04';
+const TERMS_VERSION = '2026-11-12';
 const TERMS_URL = 'https://img2img.shop/terms';
 const ACCEPTABLE_USE_URL = 'https://img2img.shop/acceptable-use';
 
@@ -22,6 +22,7 @@ const HOSTED_MAX_SOURCE_IMAGES = 5;
 
 // ImageBlur inputs within the node's limits (radius 1-31, sigma 0.1-10). Blurs scale with the image, and
 // ComfyUI rejects the whole workflow when one is out of range, so large photos would fail otherwise.
+// Used by: web pages, the result tab, the Library, the img2img server.
 function imageBlurInputs(image, radius, sigma) {
   return {
     "image": image,
@@ -87,6 +88,7 @@ const CONTROLNET_PREPROCESSORS = [
 
 // The value for one preprocessor input: the saved option if the node still accepts it, else its default.
 // Undefined for inputs that aren't plain numbers or choices.
+// Used by: web pages, the result tab, the Library, the img2img server.
 function controlnetInputValue(spec, saved) {
   const [type, config = {}] = spec;
   const options = Array.isArray(type) ? type : type === 'COMBO' ? (config.options || []) : type === 'BOOLEAN' ? [true, false] : null;
@@ -101,6 +103,7 @@ function controlnetInputValue(spec, saved) {
 }
 
 // nodeInfo(nodeClass) returns a node's ComfyUI object_info entry, or null when it isn't installed
+// Used by: web pages, the result tab, the Library.
 function buildControlnetWorkflow(targetImage, settings, imageSize, nodeInfo) {
   const preprocessor = settings.controlnetPreprocessor || CONTROLNET_DEFAULT_PREPROCESSOR;
   const info = nodeInfo(preprocessor);
@@ -176,10 +179,12 @@ const RESTORE_DEFAULTS = { model: 'GFPGANv1.4.pth', strength: 100, fidelity: 50 
 // non-commercial, so they were removed; a saved one falls back to the default.
 const RESTORE_MODELS = ['GFPGANv1.4.pth', 'GFPGANv1.3.pth'];
 
+// Used by: web pages, the result tab, the Library.
 function inputImageNode(targetImage) {
   return { "inputs": { "image": targetImage }, "class_type": "ETN_LoadImageBase64", "_meta": { "title": "Input Image" } };
 }
 
+// Used by: web pages, the result tab, the Library.
 function previewNode(image) {
   // PreviewImage: result goes to ComfyUI's temp folder, not output/
   return { "inputs": { "images": image }, "class_type": "PreviewImage", "_meta": { "title": "Final Result", "img2img_result": true } };
@@ -188,6 +193,7 @@ function previewNode(image) {
 // Upscale with an ESRGAN-style model (it upscales by its own factor), then scale to the chosen factor,
 // capped so the longest side stays within UPSCALE_MAX_SIDE. A larger image is shrunk first so a 4x model's
 // output stays within UPSCALE_MAX_SIDE too: at 2048px the 8192px intermediate took minutes on the GPU.
+// Used by: web pages, the result tab, the Library.
 function buildUpscaleWorkflow(targetImage, settings, imageSize) {
   const scale = Number(settings.upscaleScale) || UPSCALE_DEFAULT_SCALE;
   const longest = Math.max(imageSize.width, imageSize.height);
@@ -218,6 +224,7 @@ function buildUpscaleWorkflow(targetImage, settings, imageSize) {
 // A strong blur of `image` (sigma in pixels of an image of `imageSize`). ImageBlur's limits (radius 31, sigma 10)
 // are too small for large images, so a smaller copy is blurred and scaled back up. ids: the three nodes' ids;
 // titles: their titles. Returns the blurred image's link.
+// Used by: web pages, the result tab, the Library.
 function addStrongBlur(workflow, ids, image, sigma, imageSize, titles = ['Shrink For Blur', 'Blur', 'Back To Full Size']) {
   const [shrinkId, blurId, growId] = ids;
   const shrink = Math.max(1, sigma / 6);
@@ -229,27 +236,32 @@ function addStrongBlur(workflow, ids, image, sigma, imageSize, titles = ['Shrink
 }
 
 // A #rrggbb setting, or the fallback when it isn't one
+// Used by: web pages, the result tab, the Library.
 function colorSetting(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : fallback;
 }
 
 // A #rrggbb colour as the number EmptyImage takes
+// Used by: web pages, the result tab, the Library.
 function colorNumber(hex) {
   return parseInt(hex.slice(1), 16);
 }
 
 // A whole-percent setting (0-100), or the fallback when it's unset
+// Used by: web pages, the result tab, the Library.
 function percentSetting(value, fallback) {
   const number = Number(value);
   return value === undefined || value === null || value === '' || !Number.isFinite(number) ? fallback : Math.min(100, Math.max(0, number));
 }
 
 // Raw base64 of a source image (the server passes data URLs, the extension raw base64)
+// Used by: web pages, the result tab, the Library.
 function rawBase64(image) {
   return image.startsWith('data:') ? image.slice(image.indexOf(',') + 1) : image;
 }
 
 // Whether the workflow uses the image selected in the popup's Source grid: a background replaced by an image
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
 function usesSourceImage(settings) {
   return settings.workflow === 'background' && settings.backgroundMode === 'image';
 }
@@ -257,6 +269,7 @@ function usesSourceImage(settings) {
 // Background removal with BiRefNet: a transparent PNG, a solid colour, the background blurred like a
 // portrait-mode photo, or replaced by a gradient or by an image from the Source grid (the foreground pasted
 // over it through BiRefNet's mask). sources: the source images (base64), for the image mode.
+// Used by: web pages, the result tab, the Library.
 function buildBackgroundWorkflow(targetImage, settings, imageSize, sources = [], nsfw = { enabled: false }) {
   const mode = settings.backgroundMode || BACKGROUND_DEFAULTS.mode;
   const workflow = {
@@ -316,6 +329,7 @@ function buildBackgroundWorkflow(targetImage, settings, imageSize, sources = [],
 // smaller first (stickers don't need more, and growing the mask is slow on very large ones).
 const STICKER_DEFAULTS = { outline: 50, color: '#ffffff', shadow: true };
 const STICKER_MAX_SIDE = 2048;
+// Used by: web pages, the result tab, the Library.
 function buildStickerWorkflow(targetImage, settings, imageSize) {
   const outlinePercent = percentSetting(settings.stickerOutline, STICKER_DEFAULTS.outline);
   const shadow = settings.stickerShadow ?? STICKER_DEFAULTS.shadow;
@@ -384,10 +398,12 @@ const SEGMENT_PROMPT_MAX = 200;
 const SEGMENT_THRESHOLD_RANGE = [5, 95]; // percent: the node's confidence_threshold is 0.05-0.95
 
 // The prompt as it's sent (and cached): one line, at most SEGMENT_PROMPT_MAX characters; '' when there's none
+// Used by: web pages, the result tab, the Library, the popup, the img2img server.
 function segmentPrompt(value) {
   return String(value ?? SEGMENT_DEFAULTS.prompt).replace(/\s+/g, ' ').trim().slice(0, SEGMENT_PROMPT_MAX);
 }
 
+// Used by: web pages, the result tab, the Library.
 function buildSegmentWorkflow(targetImage, settings, nodeInfo) {
   if (!nodeInfo(SEGMENT_NODE)) {
     throw new Error("ComfyUI doesn't have the SAM3 Segmentation node (comfyui-rmbg by 1038lab, in ComfyUI Manager)");
@@ -432,6 +448,7 @@ function buildSegmentWorkflow(targetImage, settings, nodeInfo) {
 // repackaged MediaPipe Face Landmarker, Apache-2.0), in models/detection
 const FACE_DETECTION_MODEL = 'mediapipe_face_fp32.safetensors';
 
+// Used by: web pages, the result tab, the Library.
 function faceDetectionModel(nodeInfo) {
   const spec = nodeInfo('LoadMediaPipeFaceLandmarker')?.input?.required?.model_name;
   const options = spec ? (Array.isArray(spec[0]) ? spec[0] : spec[1]?.options || []) : [];
@@ -443,6 +460,7 @@ function faceDetectionModel(nodeInfo) {
 
 // The face oval mask of every face found in `image` (ids 150-152). minConfidence: lower finds smaller and turned
 // faces, and more false ones.
+// Used by: web pages, the result tab, the Library.
 function addFaceMask(workflow, image, nodeInfo, { allFaces, minConfidence, variant }) {
   workflow["150"] = { "inputs": { "model_name": faceDetectionModel(nodeInfo) }, "class_type": "LoadMediaPipeFaceLandmarker", "_meta": { "title": "Face Detection Model" } };
   workflow["151"] = {
@@ -458,6 +476,7 @@ function addFaceMask(workflow, image, nodeInfo, { allFaces, minConfidence, varia
 // ears, and their edge softened. The detector runs both its close-up and its far range at a low threshold: a face
 // that's missed stays recognisable, while a false find only blurs a patch.
 const FACE_BLUR_DEFAULTS = { style: 'pixelate', strength: 60 };
+// Used by: web pages, the result tab, the Library.
 function buildFaceBlurWorkflow(targetImage, settings, imageSize, nodeInfo) {
   const strength = Math.max(10, percentSetting(settings.faceBlurStrength, FACE_BLUR_DEFAULTS.strength)) / 100;
   const style = settings.faceBlurStyle === 'blur' ? 'blur' : 'pixelate';
@@ -505,6 +524,7 @@ const ID_PHOTO_DEFAULTS = { size: 'eu', background: '#ffffff' };
 const ID_PHOTO_SQUARE = 1024; // step 1's square; the face oval is half its height
 const ID_PHOTO_PAD = 512; // white added around it for step 2
 const ID_PHOTO_HAIR = 0.45; // the hair above the oval, as a fraction of the oval's height
+// Used by: web pages, the result tab, the Library.
 function buildIdPhotoWorkflow(targetImage, settings, imageSize, nodeInfo) {
   const size = ID_PHOTO_SIZES[settings.idPhotoSize] || ID_PHOTO_SIZES[ID_PHOTO_DEFAULTS.size];
   const workflow = { "102": inputImageNode(targetImage) };
@@ -556,6 +576,7 @@ function buildIdPhotoWorkflow(targetImage, settings, imageSize, nodeInfo) {
 // vignette. Strength (0-100) sets each one's amount.
 const FILTER_STYLES = ['pixel', 'posterize', 'sepia', 'bw', 'vignette'];
 const FILTER_DEFAULTS = { style: 'pixel', strength: 50 };
+// Used by: web pages, the result tab, the Library.
 function buildFilterWorkflow(targetImage, settings, imageSize) {
   const style = FILTER_STYLES.includes(settings.filterStyle) ? settings.filterStyle : FILTER_DEFAULTS.style;
   const strength = percentSetting(settings.filterStrength, FILTER_DEFAULTS.strength) / 100;
@@ -628,6 +649,7 @@ const COLORIZE_MODEL = 'ddcolor_modelscope.pth';
 const COLORIZE_DEFAULTS = { strength: 100 };
 
 // The upscale model file a restoration workflow needs, or an error saying where it goes
+// Used by: web pages, the result tab, the Library.
 function restorationModel(nodeInfo, file, url) {
   const spec = nodeInfo('UpscaleModelLoader')?.input?.required?.model_name;
   const options = spec ? (Array.isArray(spec[0]) ? spec[0] : spec[1]?.options || []) : [];
@@ -639,6 +661,7 @@ function restorationModel(nodeInfo, file, url) {
 
 // Colourise: DDColor predicts the colours at 512x512 and puts them under the photo's own brightness at full size.
 // Strength blends the colours with the original.
+// Used by: web pages, the result tab, the Library.
 function buildColorizeWorkflow(targetImage, settings, nodeInfo) {
   if (!nodeInfo(COLORIZE_NODE)) {
     throw new Error("ComfyUI doesn't have the DDColor node (ComfyUI-DDColor by kijai, in ComfyUI Manager)");
@@ -658,6 +681,7 @@ function buildColorizeWorkflow(targetImage, settings, nodeInfo) {
 }
 
 // Photo cleanup: a 1x restoration model over the whole image (ComfyUI tiles it), against JPEG artefacts or noise
+// Used by: web pages, the result tab, the Library.
 function buildCleanupWorkflow(targetImage, settings, nodeInfo) {
   const mode = CLEANUP_MODELS[settings.cleanupMode] ? settings.cleanupMode : CLEANUP_DEFAULTS.mode;
   const model = restorationModel(nodeInfo, CLEANUP_MODELS[mode], `github.com/Phhofm/models/releases/tag/${CLEANUP_MODELS[mode].replace('.safetensors', '')}`);
@@ -716,6 +740,7 @@ const TRANSFORM_PIXELS = 1024 * 1024; // the model works at about one megapixel
 const TRANSFORM_STEPS = 4; // the Lightning LoRA's steps, at CFG 1
 
 // The preset's edit instruction
+// Used by: web pages, the result tab, the Library, the img2img server.
 function transformPrompt(preset) {
   const { outfit, prompt } = TRANSFORM_PRESETS[preset] || TRANSFORM_PRESETS[TRANSFORM_DEFAULTS.preset];
   // (Naming "adults and children" made it worse: it skipped children, and added a child to a photo of one adult)
@@ -723,6 +748,7 @@ function transformPrompt(preset) {
 }
 
 // The installed name of a model file the workflow needs: the file itself, or one in a subfolder of its folder
+// Used by: web pages, the result tab, the Library.
 function transformModel(nodeInfo, nodeClass, input, { file, folder, url }) {
   const spec = nodeInfo(nodeClass)?.input?.required?.[input];
   const options = spec ? (Array.isArray(spec[0]) ? spec[0] : spec[1]?.options || []) : [];
@@ -740,6 +766,7 @@ function transformSize(imageSize) {
   return { width: side(imageSize.width), height: side(imageSize.height) };
 }
 
+// Used by: web pages, the result tab, the Library.
 function buildTransformWorkflow(targetImage, settings, imageSize, nodeInfo, nsfw) {
   const preset = TRANSFORM_PRESETS[settings.transformPreset] ? settings.transformPreset : TRANSFORM_DEFAULTS.preset;
   const variation = Math.max(1, Math.round(Number(settings.transformVariation) || TRANSFORM_DEFAULTS.variation));
@@ -781,6 +808,7 @@ function buildTransformWorkflow(targetImage, settings, imageSize, nodeInfo, nsfw
 }
 
 // The ComfyUI nodes a shared workflow's builder asks about (nodeInfo), so local mode can look them up first
+// Used by: web pages, the result tab, the Library, the img2img server.
 function workflowNodeQueries(workflow, settings) {
   return {
     controlnet: [settings.controlnetPreprocessor || CONTROLNET_DEFAULT_PREPROCESSOR],
@@ -794,6 +822,7 @@ function workflowNodeQueries(workflow, settings) {
 }
 
 // Restore every face in the photo with a face restore model, without swapping it (old or low-res photos)
+// Used by: web pages, the result tab, the Library.
 function buildRestoreWorkflow(targetImage, settings) {
   const strength = Number(settings.restoreStrength ?? RESTORE_DEFAULTS.strength) / 100;
   const fidelity = Number(settings.restoreFidelity ?? RESTORE_DEFAULTS.fidelity) / 100;
@@ -818,6 +847,7 @@ const NSFW_PROBE_SIZE = 64;
 
 // Checks `image` (a link) as checkId; returns the link to use instead (the filter's output). label names the
 // image in the refusal ("target image", "result"...).
+// Used by: web pages, the result tab, the Library, the img2img server.
 function addSafetyCheck(workflow, image, checkId, nsfw, label) {
   workflow[checkId] = { "inputs": { "image": image, "sensitivity": nsfw.sensitivity }, "class_type": NSFW_CHECK_NODE, "_meta": { "title": `NSFW Check (${label})` } };
   const difference = (name, first, second) => {
@@ -836,6 +866,7 @@ function addSafetyCheck(workflow, image, checkId, nsfw, label) {
 }
 
 // The target image is checked before anything else uses it: every node that read the loader reads the check
+// Used by: web pages, the result tab, the Library, the img2img server.
 function addSafetyGate(workflow, loaderNodeId, gateNodeId, nsfw) {
   if (!nsfw.enabled) {
     return workflow;
@@ -852,6 +883,7 @@ function addSafetyGate(workflow, loaderNodeId, gateNodeId, nsfw) {
 }
 
 // A graph's NSFW probes: [{ node, label }]
+// Used by: web pages, the result tab, the Library, the img2img server.
 function safetyProbes(workflow) {
   return Object.entries(workflow)
     .filter(([, node]) => node.class_type === 'PreviewImage' && node._meta?.img2img_probe)
@@ -860,11 +892,13 @@ function safetyProbes(workflow) {
 
 // A graph's result: the node marked img2img_result ("Final Result"), the only output whose image is shown. Other
 // outputs can have images too (a probe, or a sampler that previews its own image), so it's never "the first".
+// Used by: web pages, the result tab, the Library, My workflows, the img2img server.
 function resultNode(workflow) {
   return Object.keys(workflow).find(node => workflow[node]._meta?.img2img_result) ?? null;
 }
 
 // The refusal for a flagged probe, worded the same everywhere
+// Used by: web pages, the result tab, the Library, the img2img server.
 function nsfwRefusal(label) {
   return `The ${label} looks NSFW, so it wasn't processed. img2img is for SFW images only.`;
 }
@@ -872,6 +906,7 @@ function nsfwRefusal(label) {
 // Build one of SHARED_WORKFLOWS with the NSFW gate on its input image (and on a source image it uses). options:
 // { nodeInfo, nsfw, sourceImages } (see buildControlnetWorkflow and addSafetyGate; sourceImages: the Source grid's
 // images, as base64 or data URLs, for the workflows that use one: usesSourceImage).
+// Used by: web pages, the result tab, the Library, the img2img server.
 function buildSharedWorkflow(workflow, targetImage, settings, imageSize, { nodeInfo, nsfw, sourceImages = [] }) {
   const graph = {
     controlnet: () => buildControlnetWorkflow(targetImage, settings, imageSize, nodeInfo),
@@ -891,6 +926,67 @@ function buildSharedWorkflow(workflow, targetImage, settings, imageSize, { nodeI
     throw new Error(`Unknown workflow: ${workflow}`);
   }
   return addSafetyGate(graph(), "102", "160", nsfw);
+}
+
+// The account the API key belongs to, as the img2img server says: its credits and where more are bought.
+// { reached: false } when the server can't be reached; with error set when it answers that it can't say (no key, a
+// revoked one), and credits null in both cases.
+// Used by: the Library, the popup.
+async function fetchAccount() {
+  const response = await chrome.runtime.sendMessage({ action: 'apiRequest', url: '/v1/me', method: 'GET' }).catch(() => null);
+  const reached = Boolean(response?.success);
+  const known = reached && response.status === 200;
+  return {
+    reached,
+    credits: known ? response.data.credits ?? null : null,
+    creditsUrl: known ? response.data.creditsUrl || null : null,
+    error: reached && !known ? response.data?.error || `The img2img server returned HTTP ${response.status}` : '',
+  };
+}
+
+// What the img2img server offers: its workflows, what each costs in credits, how long each usually takes, and the
+// ControlNet preprocessors and upscale models it has. answered is false when it can't be reached or says nothing
+// usable; the lists are then empty (preprocessors and upscaleModels null, which is "unknown" to the popup).
+// Used by: the Library, the popup.
+async function fetchServerWorkflows() {
+  const response = await chrome.runtime.sendMessage({ action: 'apiRequest', url: '/v1/workflows', method: 'GET' }).catch(() => null);
+  const answered = Boolean(response?.success) && response.status === 200 && Array.isArray(response.data?.workflows);
+  return {
+    answered,
+    workflows: answered ? response.data.workflows : [],
+    credits: answered ? response.data.credits || {} : {},
+    preprocessors: answered ? response.data.preprocessors || {} : null,
+    upscaleModels: answered ? response.data.upscaleModels || [] : null,
+    typicalWaits: answered ? response.data.typicalWaitMs || {} : {},
+  };
+}
+
+// "Ask Before" (autoAskOver, in the settings): a run of more images than this says how many and what they cost
+// first. Unset means the default, which the settings page shows too; 0 is "never ask". The popup asks for Automatic
+// Selection, the Library page for its Process selected.
+const DEFAULT_ASK_OVER = 20;
+
+// Used by: the Library, the popup.
+function askOverLimit(autoAskOver) {
+  return autoAskOver === undefined ? DEFAULT_ASK_OVER : Math.round(Number(autoAskOver)) || 0;
+}
+
+// What a run of count images costs, as the end of that question: said only for the img2img server, and only when
+// the workflow's credits are known
+// Used by: the Library, the popup.
+function runCostText(count, creditsEach, onServer) {
+  const total = Number.isFinite(creditsEach) ? count * creditsEach : null;
+  return onServer && total !== null ? ` That costs about ${total} credit${total === 1 ? '' : 's'}.` : '';
+}
+
+// "Jobs at Once": how many jobs run at a time. One on the img2img server; My ComfyUI is the user's own GPU, so the
+// setting lets it have up to JOBS_AT_ONCE_MOST.
+const JOBS_AT_ONCE_MOST = 4;
+
+// Used by: the Library, the background script.
+function jobsAtOnceFor(setting, processingMode) {
+  const wanted = processingMode === 'local' ? Math.round(Number(setting)) || 1 : 1;
+  return Math.min(Math.max(wanted, 1), JOBS_AT_ONCE_MOST);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
